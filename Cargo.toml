@@ -1,12 +1,13 @@
 [package]
 name = "axum-server"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["Programatik <programatik29@gmail.com>"]
 edition = "2018"
-description = "Work in progress."
+description = "High level server for axum."
 license = "MIT"
 
 [dependencies]
+futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "net"] }
 tokio-rustls = "0.22"
 http = "0.2"
