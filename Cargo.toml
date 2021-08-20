@@ -6,12 +6,18 @@ edition = "2018"
 description = "High level server for axum."
 license = "MIT"
 
+[features]
+rustls = ["tokio-rustls"]
+
 [dependencies]
 futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "net"] }
-tokio-rustls = "0.22"
 http = "0.2"
 http-body = "0.4"
 tower-service = "0.3.1"
 tower-http = { version = "0.1", features = ["add-extension"] }
 hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
+
+# optional dependencies
+
+tokio-rustls = { optional = true, version = "0.22" }
