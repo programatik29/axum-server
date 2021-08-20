@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use futures_util::stream::{StreamExt, FuturesUnordered};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use tower_http::add_extension::AddExtension;
 
@@ -28,7 +28,7 @@ use tokio_rustls::{
 
 use tower_service::Service;
 
-type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>>>;
+type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
 #[derive(Default)]
 pub struct Server {
@@ -45,7 +45,7 @@ impl Server {
 
     pub fn bind<A>(mut self, addr: A) -> Self
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
         self.addrs.push(Box::new(addr));
         self
@@ -53,7 +53,7 @@ impl Server {
 
     pub fn bind_rustls<A>(mut self, addr: A) -> Self
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
         self.tls_addrs.push(Box::new(addr));
         self
@@ -115,13 +115,16 @@ impl Server {
         B::Error: std::error::Error + Send + Sync,
     {
         if self.addrs.is_empty() && self.tls_addrs.is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "bind or bind_rustls is not set"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "bind or bind_rustls is not set",
+            ));
         }
 
         let mut fut_list = FuturesUnordered::new();
 
         if !self.addrs.is_empty() {
-            let addrs = collect_addrs(self.addrs)?;
+            let addrs = collect_addrs(self.addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(http_task(addr, service.clone()));
@@ -144,7 +147,7 @@ impl Server {
             let config = rustls_config(key, certs)?;
             let acceptor = TlsAcceptor::from(config);
 
-            let addrs = collect_addrs(self.tls_addrs)?;
+            let addrs = collect_addrs(self.tls_addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(https_task(addr, acceptor.clone(), service.clone()));
@@ -161,30 +164,32 @@ impl Server {
 
 pub fn bind<A>(addr: A) -> Server
 where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
 {
     Server::new().bind(addr)
 }
 
 pub fn bind_rustls<A>(addr: A) -> Server
 where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
 {
     Server::new().bind_rustls(addr)
 }
 
-fn collect_addrs(addrs: Vec<BoxedToSocketAddrs>) -> io::Result<Vec<SocketAddr>> {
-    let mut vec = Vec::new();
+fn collect_addrs(addrs: Vec<BoxedToSocketAddrs>) -> JoinHandle<io::Result<Vec<SocketAddr>>> {
+    spawn_blocking(move || {
+        let mut vec = Vec::new();
 
-    for addrs in addrs {
-        let mut iter = addrs.to_socket_addrs()?;
+        for addrs in addrs {
+            let mut iter = addrs.to_socket_addrs()?;
 
-        while let Some(addr) = iter.next() {
-            vec.push(addr);
+            while let Some(addr) = iter.next() {
+                vec.push(addr);
+            }
         }
-    }
 
-    Ok(vec)
+        Ok(vec)
+    })
 }
 
 fn http_task<S, B>(addr: SocketAddr, service: S) -> JoinHandle<io::Result<()>>
