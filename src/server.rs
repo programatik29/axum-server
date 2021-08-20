@@ -69,6 +69,7 @@ impl Server {
     ///
     /// Certificate and private key must be set before or after calling this.
     #[cfg(feature = "rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn bind_rustls<A>(mut self, addr: A) -> Self
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
@@ -81,6 +82,7 @@ impl Server {
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn private_key(mut self, pem_key: Vec<u8>) -> Self {
         let handle = spawn_blocking(move || {
             let mut reader = Cursor::new(pem_key);
@@ -96,6 +98,7 @@ impl Server {
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn certificate(mut self, pem_cert: Vec<u8>) -> Self {
         let handle = spawn_blocking(move || {
             let mut reader = Cursor::new(pem_cert);
@@ -111,6 +114,7 @@ impl Server {
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn private_key_file(mut self, path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_owned();
         let handle = spawn_blocking(move || {
@@ -127,6 +131,7 @@ impl Server {
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn certificate_file(mut self, path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_owned();
         let handle = spawn_blocking(move || {
@@ -210,6 +215,7 @@ where
 
 /// Shortcut for creating [`Server`](Server) and calling `bind_rustls` on it.
 #[cfg(feature = "rustls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
 pub fn bind_rustls<A>(addr: A) -> Server
 where
     A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
