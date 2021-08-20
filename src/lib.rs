@@ -30,37 +30,19 @@ use tower_service::Service;
 
 type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>>>;
 
-pub struct Server;
-
-impl Server {
-    pub fn builder() -> Builder {
-        Builder::default()
-    }
-
-    pub fn bind<A>(addr: A) -> Builder
-    where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
-    {
-        Self::builder().bind(addr)
-    }
-
-    pub fn bind_rustls<A>(addr: A) -> Builder
-    where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
-    {
-        Self::builder().bind_rustls(addr)
-    }
-}
-
 #[derive(Default)]
-pub struct Builder {
+pub struct Server {
     addrs: Vec<BoxedToSocketAddrs>,
     tls_addrs: Vec<BoxedToSocketAddrs>,
     private_key: Option<JoinHandle<io::Result<PrivateKey>>>,
     certificates: Option<JoinHandle<io::Result<Vec<Certificate>>>>,
 }
 
-impl Builder {
+impl Server {
+    pub fn new() -> Self {
+        Server::default()
+    }
+
     pub fn bind<A>(mut self, addr: A) -> Self
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
@@ -175,6 +157,20 @@ impl Builder {
 
         Ok(())
     }
+}
+
+pub fn bind<A>(addr: A) -> Server
+where
+    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+{
+    Server::new().bind(addr)
+}
+
+pub fn bind_rustls<A>(addr: A) -> Server
+where
+    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + 'static,
+{
+    Server::new().bind_rustls(addr)
 }
 
 fn collect_addrs(addrs: Vec<BoxedToSocketAddrs>) -> io::Result<Vec<SocketAddr>> {
