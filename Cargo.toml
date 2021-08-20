@@ -1,0 +1,9 @@
+[package]
+name = "axum-server"
+version = "0.0.0"
+authors = ["Programatik <programatik29@gmail.com>"]
+edition = "2018"
+description = "Work in progress."
+license = "MIT"
+
+[dependencies]
