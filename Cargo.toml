@@ -3,7 +3,7 @@ name = "axum-server"
 version = "0.1.0"
 authors = ["Programatik <programatik29@gmail.com>"]
 edition = "2018"
-description = "High level server for axum."
+description = "High level server designed to be used with axum framework."
 license = "MIT"
 
 [features]
