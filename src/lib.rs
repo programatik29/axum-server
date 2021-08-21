@@ -1,8 +1,8 @@
-//! axum-server is a hyper server implementation designed to be used with axum framework.
+//! axum-server is a [`hyper`] server implementation designed to be used with [`axum`] framework.
 //!
 //! # Example
 //!
-//! Axum "Hello, World!" example can be run like:
+//! [`axum`] "Hello, World!" example can be run like:
 //!
 //! ```rust,no_run
 //! use axum::{
@@ -20,6 +20,9 @@
 //!         .unwrap();
 //! }
 //! ```
+//!
+//! [`axum`]: https://crates.io/crates/axum
+//! [`hyper`]: https://crates.io/hyperium/hyper
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

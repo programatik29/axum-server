@@ -205,7 +205,7 @@ impl Server {
     }
 }
 
-/// Shortcut for creating [`Server`](Server) and calling `bind` on it.
+/// Shortcut for creating [`Server`](Server::new) and calling [`bind`](Server::bind) on it.
 pub fn bind<A>(addr: A) -> Server
 where
     A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
@@ -213,7 +213,7 @@ where
     Server::new().bind(addr)
 }
 
-/// Shortcut for creating [`Server`](Server) and calling `bind_rustls` on it.
+/// Shortcut for creating [`Server`](Server::new) and calling [`bind_rustls`](Server::bind_rustls) on it.
 #[cfg(feature = "rustls")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
 pub fn bind_rustls<A>(addr: A) -> Server
