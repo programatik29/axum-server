@@ -22,7 +22,7 @@
 //! ```
 //!
 //! [`axum`]: https://crates.io/crates/axum
-//! [`hyper`]: https://crates.io/hyperium/hyper
+//! [`hyper`]: https://crates.io/crates/hyper
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
