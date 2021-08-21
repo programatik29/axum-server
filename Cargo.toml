@@ -21,3 +21,7 @@ hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
 # optional dependencies
 
 tokio-rustls = { optional = true, version = "0.22" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+axum = { git = "https://github.com/tokio-rs/axum" }

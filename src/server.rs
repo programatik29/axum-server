@@ -291,7 +291,10 @@ where
             let svc = AddExtension::new(service.clone(), addr);
 
             tokio::spawn(async move {
-                let _ = Http::new().serve_connection(stream, svc).await;
+                let _ = Http::new()
+                    .serve_connection(stream, svc)
+                    .with_upgrades()
+                    .await;
             });
         }
     })
@@ -338,9 +341,112 @@ where
 
             tokio::spawn(async move {
                 if let Ok(stream) = acceptor.accept(stream).await {
-                    let _ = Http::new().serve_connection(stream, svc).await;
+                    let _ = Http::new()
+                        .serve_connection(stream, svc)
+                        .with_upgrades()
+                        .await;
                 }
             });
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_bind_addresses() {
+        let server = bind("127.0.0.1:3000").bind("127.0.0.1:3001");
+
+        let addrs = collect_addrs(server.addrs).await.unwrap().unwrap();
+
+        assert_eq!(addrs, [addr("127.0.0.1:3000"), addr("127.0.0.1:3001")]);
+    }
+}
+
+#[cfg(all(test, feature = "rustls"))]
+mod tls_tests {
+    use super::*;
+
+    // Self Signed Certificate
+    const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
+MIIDkzCCAnugAwIBAgIUaVoRuh53PqMETXoouyFrcDmZeSkwDQYJKoZIhvcNAQEL
+BQAwWTELMAkGA1UEBhMCVVMxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
+GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDESMBAGA1UEAwwJbG9jYWxob3N0MB4X
+DTIxMDgyMTExMDg1OVoXDTIyMDgyMTExMDg1OVowWTELMAkGA1UEBhMCVVMxEzAR
+BgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMgUHR5
+IEx0ZDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A
+MIIBCgKCAQEAoUG6X1vBuwCoVeE+SlRPvJnbLPdwBlzuipE9sQIVkA+XJi56qKOU
+/V054bUvJ32JD6MM2LH/jqjg+DE/7t2hd0wylRmJK8Y3PcZI4ulgNSLg2MTu6EvG
+3TfjAW7hFV18XwGJfDwN46/XN5HpEKgj0FCuxTyENhkgAH2yKVfYc/RMhdPssG/M
+spKWYji1MS/Pq5qBzbgk3Ish4Yet85/kbzxrrVQVMGOqyv5iR1sWX9AtHkGUfNrW
+NA8hDIWnZH6xa4gVWF+ZDtVEXmxGSr7R3AlED9aKd2bfDXJAFbLCPUvKRe9tbDN1
+LnGeVjYrpAMwTKb5x6LbYcOSGhfw2+ivEwIDAQABo1MwUTAdBgNVHQ4EFgQUm+sW
+WZboXk7yY4ixgiIBH8pvJX0wHwYDVR0jBBgwFoAUm+sWWZboXk7yY4ixgiIBH8pv
+JX0wDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAa55VErxh6DyV
+qbiItDSecqLgK3gJ97M3igV2ZXiqtwkjPbjC6RiTj+qB58PEgEK57DMQ100CwC4H
+08vfwPyaDgxAgdDMf6y/ZpQXrPDGFC3MK7aDgN5Ewk++i5rLUIF7uzdUQG7IgCOO
+ofDgLTGmBldeM99QgKkxq0b2UGyC25AhFiEoKUDM9cLl1fHYIauicXDXyZzrlqyY
+W28VYPMeMGOjPUbSP/CN85N1Yaoqxnf3CmhJbgkdDstKxZr92Dyx7RHBQFN5sGnK
+w5yD87DSEgRZ1aqKPmenXFkGspsLcLL0VBRr5ItNSQ46xWSjEbdCQXvCd1XEsLXh
+Fll6LboxLg==
+-----END CERTIFICATE-----"#;
+
+    // Self Signed Private Key
+    const PRIVATE_KEY: &'static str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQChQbpfW8G7AKhV
+4T5KVE+8mdss93AGXO6KkT2xAhWQD5cmLnqoo5T9XTnhtS8nfYkPowzYsf+OqOD4
+MT/u3aF3TDKVGYkrxjc9xkji6WA1IuDYxO7oS8bdN+MBbuEVXXxfAYl8PA3jr9c3
+kekQqCPQUK7FPIQ2GSAAfbIpV9hz9EyF0+ywb8yykpZiOLUxL8+rmoHNuCTciyHh
+h63zn+RvPGutVBUwY6rK/mJHWxZf0C0eQZR82tY0DyEMhadkfrFriBVYX5kO1URe
+bEZKvtHcCUQP1op3Zt8NckAVssI9S8pF721sM3UucZ5WNiukAzBMpvnHotthw5Ia
+F/Db6K8TAgMBAAECggEAHtpPiU0p/Nh8XKoS2+/TrbcWOz1AXsdLEJIHZqWKcJy7
+A6Ai8b8Sk4NRvsCGvByFq8s7ev5bcfUXzgTGQbJ/4S5gAyz2lLyA9z3H1jpmoOQC
+dxb+ys0syEiYEz8eq5LOZ/MIVg+7bJPJLqWpHPm+mG3Hco9IkH0wJUfnXYekL1MB
+zXbyQIf+YV+qIlEDFQ+HMozBPOtEDomq/9WuZ6EPEG7Ulkpl1JQ70+YzkuNlGbco
+pYVSryjHg5e7MCl4sGs/nviO1kmBUA+OYt2sbA8h+kUuLbk3WThbMPc7Cy3Llx6P
+92Q4ERVvgR4yNi5ZUZNRXPv1K2368Ekh21VeRNkxoQKBgQDLlGH0hJV3bXX1hPjJ
+kSm+ULwPUKJQDucaF6CaOodMRLCnQy88CXOEqF00R2sI3BPIpJMyyqHjrXxOYBDQ
+SjotzPFNoL8WRzpFEszZmd5Q7lRGVjcH7aJ4Cg34QPKL8DVzNFFmafJxAe2bzw3J
+fC4xIdEGnu0CnP6ey6e+rMhncQKBgQDKx36slJVeXj5ODl5KrpFsmARIcAyk+M5x
+zN6ZcYcITYqqEztn4gghO46sQJjF+T8xPKhQVR1Z5/6/fAkwKScDA0ITq0nfS3oe
+LTi+v98ijmFLp/R17rDlfFRLYAi8S4hSlAMuSJkpcVhaZFtfhf/aEJLmSfHspg/Q
+Z8psfRYkwwKBgHvy5gkYSGCkdrN7uHYROhcz1KyGbazMxgxu4kvE4uee0uej0jh9
+kKXuVIEmEpccV7dL7It6MEMNN6gIeXQ4HWARbcHT40RPLb0siyjZtDAWS51flLXx
+C4CGrqa99G8bW4+/BOiUDRadE+xPjpdkUkN70WZ0kN2MdMJ+QK2pSYMhAoGBAMCj
+zR+++DfyaFZXKBTiypzTvh3i9OA0zksmScKUK6gjojv4kVMbVIXdwqi5pWlOZE4u
+RegrM/sZftYCy+fI8JrYGYn+C+vqFFVeuK3eMejuQlhRctgmrj8VYi9JSIM5boSk
+wHDT302TtFALTxLshidv316PmRksmZFvSMrP+p1pAoGAUgzxEfQXfagS+hE/g1cs
+ZOwXFVl9mCxXHeYG/tnW4TStiro0hP3lwGUKPaFcR3vHbXLoDrmLycMLP13eOCSt
+7t/QgTOtGGRHGOOSqJeDM++kcbvnRY6w6Y4bB7geiUswFvtuZ3TAQJuIOAXr9DCW
+SfyHiEc0jh9LdjUlMvCXaB8=
+-----END PRIVATE KEY-----"#;
+
+    #[tokio::test]
+    async fn test_bind_addresses() {
+        let server = bind_rustls("127.0.0.1:3443").bind_rustls("127.0.0.1:3444");
+
+        let tls_addrs = collect_addrs(server.tls_addrs).await.unwrap().unwrap();
+
+        assert_eq!(tls_addrs, [addr("127.0.0.1:3443"), addr("127.0.0.1:3444")]);
+    }
+
+    #[tokio::test]
+    async fn test_key_cert() {
+        let key = PRIVATE_KEY.as_bytes().to_vec();
+        let cert = CERTIFICATE.as_bytes().to_vec();
+
+        let server = Server::new().private_key(key).certificate(cert);
+
+        let private_key = server.private_key.unwrap().await.unwrap().unwrap();
+        let certificates = server.certificates.unwrap().await.unwrap().unwrap();
+
+        rustls_config(private_key, certificates).unwrap();
+    }
+}
+
+#[cfg(test)]
+fn addr(s: &'static str) -> SocketAddr {
+    s.parse().unwrap()
 }
