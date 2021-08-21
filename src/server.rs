@@ -146,7 +146,7 @@ impl Server {
 
     /// Serve provided cloneable service on all binded addresses.
     ///
-    /// Returns error if accepting connection fails in any one of binded addresses.
+    /// If accepting connection fails in any one of binded addresses, listening in all binded addresses will be stopped and then an error will be returned.
     pub async fn serve<S, B>(self, service: S) -> io::Result<()>
     where
         S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Clone + 'static,
@@ -198,7 +198,11 @@ impl Server {
         }
 
         while let Some(handle) = fut_list.next().await {
-            handle.unwrap()?;
+            if let Err(e) = handle.unwrap() {
+                fut_list.iter().for_each(|handle| handle.abort());
+
+                return Err(e);
+            }
         }
 
         Ok(())
