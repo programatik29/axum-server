@@ -37,15 +37,19 @@ use tower_service::Service;
 
 type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
+#[derive(Default)]
+struct TlsConfig {
+    addrs: Vec<BoxedToSocketAddrs>,
+    pkey: Option<JoinHandle<io::Result<PrivateKey>>>,
+    certs: Option<JoinHandle<io::Result<Vec<Certificate>>>>,
+}
+
 /// Configurable HTTP or HTTPS server, supporting HTTP/1.1 and HTTP2.
 #[derive(Default)]
 pub struct Server {
     addrs: Vec<BoxedToSocketAddrs>,
-    tls_addrs: Vec<BoxedToSocketAddrs>,
     #[cfg(feature = "rustls")]
-    private_key: Option<JoinHandle<io::Result<PrivateKey>>>,
-    #[cfg(feature = "rustls")]
-    certificates: Option<JoinHandle<io::Result<Vec<Certificate>>>>,
+    tls: TlsConfig,
 }
 
 impl Server {
@@ -74,7 +78,7 @@ impl Server {
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
-        self.tls_addrs.push(Box::new(addr));
+        self.tls.addrs.push(Box::new(addr));
         self
     }
 
@@ -90,7 +94,7 @@ impl Server {
             Ok(load_private_key(&mut reader)?)
         });
 
-        self.private_key = Some(handle);
+        self.tls.pkey = Some(handle);
         self
     }
 
@@ -106,7 +110,7 @@ impl Server {
             Ok(load_certificates(&mut reader)?)
         });
 
-        self.certificates = Some(handle);
+        self.tls.certs = Some(handle);
         self
     }
 
@@ -123,7 +127,7 @@ impl Server {
             Ok(load_private_key(&mut reader)?)
         });
 
-        self.private_key = Some(handle);
+        self.tls.pkey = Some(handle);
         self
     }
 
@@ -140,7 +144,7 @@ impl Server {
             Ok(load_certificates(&mut reader)?)
         });
 
-        self.certificates = Some(handle);
+        self.tls.certs = Some(handle);
         self
     }
 
@@ -156,7 +160,16 @@ impl Server {
         B::Data: Send,
         B::Error: std::error::Error + Send + Sync,
     {
-        if self.addrs.is_empty() && self.tls_addrs.is_empty() {
+        #[cfg(not(feature = "rustls"))]
+        if self.addrs.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "bind or bind_rustls is not set",
+            ));
+        }
+
+        #[cfg(feature = "rustls")]
+        if self.addrs.is_empty() && self.tls.addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 "bind or bind_rustls is not set",
@@ -174,14 +187,14 @@ impl Server {
         }
 
         #[cfg(feature = "rustls")]
-        if !self.tls_addrs.is_empty() {
-            let key = self.private_key.ok_or(io::Error::new(
+        if !self.tls.addrs.is_empty() {
+            let key = self.tls.pkey.ok_or(io::Error::new(
                 ErrorKind::InvalidInput,
                 "private_key or private_key_file is not set",
             ))?;
             let key = key.await.unwrap()?;
 
-            let certs = self.certificates.ok_or(io::Error::new(
+            let certs = self.tls.certs.ok_or(io::Error::new(
                 ErrorKind::InvalidInput,
                 "certificates or certificates_file is not set",
             ))?;
@@ -190,7 +203,7 @@ impl Server {
             let config = rustls_config(key, certs)?;
             let acceptor = TlsAcceptor::from(config);
 
-            let addrs = collect_addrs(self.tls_addrs).await.unwrap()?;
+            let addrs = collect_addrs(self.tls.addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(https_task(addr, acceptor.clone(), service.clone()));
