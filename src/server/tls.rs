@@ -1,12 +1,14 @@
-use std::{
-    io::{self, ErrorKind},
-    net::{SocketAddr, ToSocketAddrs},
+use crate::server::{
+    collect_addrs,
+    http_task,
+    Server,
+    BoxedToSocketAddrs,
 };
 
-#[cfg(feature = "rustls")]
 use std::{
+    io::{self, ErrorKind, BufRead, BufReader, Cursor, Seek, SeekFrom},
+    net::{SocketAddr, ToSocketAddrs},
     fs::File,
-    io::{BufRead, BufReader, Cursor, Seek, SeekFrom},
     path::Path,
     sync::Arc,
 };
@@ -24,7 +26,6 @@ use hyper::server::conn::Http;
 use tokio::net::TcpListener;
 use tokio::task::{spawn_blocking, JoinHandle};
 
-#[cfg(feature = "rustls")]
 use tokio_rustls::{
     rustls::{
         internal::pemfile::certs, internal::pemfile::pkcs8_private_keys,
@@ -35,9 +36,6 @@ use tokio_rustls::{
 
 use tower_service::Service;
 
-type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
-
-#[cfg(feature = "rustls")]
 #[derive(Default)]
 struct TlsConfig {
     addrs: Vec<BoxedToSocketAddrs>,
@@ -45,20 +43,18 @@ struct TlsConfig {
     certs: Option<JoinHandle<io::Result<Vec<Certificate>>>>,
 }
 
-/// Configurable HTTP or HTTPS server, supporting HTTP/1.1 and HTTP2.
-#[derive(Default)]
-pub struct Server {
+/// Configurable HTTP and HTTPS server, supporting HTTP/1.1 and HTTP2.
+pub struct TlsServer {
     addrs: Vec<BoxedToSocketAddrs>,
-    #[cfg(feature = "rustls")]
     tls: TlsConfig,
 }
 
-impl Server {
-    /// Create a new `Server`.
-    ///
-    /// Must bind to an address before calling [`serve`](Server::serve).
-    pub fn new() -> Self {
-        Server::default()
+impl TlsServer {
+    pub(crate) fn from(server: Server) -> Self {
+        Self {
+            addrs: server.addrs,
+            tls: TlsConfig::default(),
+        }
     }
 
     /// Bind to a single address or multiple addresses.
@@ -73,8 +69,6 @@ impl Server {
     /// Bind to a single address or multiple addresses. Using tls protocol on streams.
     ///
     /// Certificate and private key must be set before or after calling this.
-    #[cfg(feature = "rustls")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn bind_rustls<A>(mut self, addr: A) -> Self
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
@@ -86,11 +80,9 @@ impl Server {
     /// Load private key in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
-    #[cfg(feature = "rustls")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
-    pub fn private_key(mut self, pem_key: Vec<u8>) -> Self {
+    pub fn private_key(mut self, key: Vec<u8>) -> Self {
         let handle = spawn_blocking(move || {
-            let mut reader = Cursor::new(pem_key);
+            let mut reader = Cursor::new(key);
 
             Ok(load_private_key(&mut reader)?)
         });
@@ -102,11 +94,9 @@ impl Server {
     /// Load certificate(s) in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
-    #[cfg(feature = "rustls")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
-    pub fn certificate(mut self, pem_cert: Vec<u8>) -> Self {
+    pub fn certificate(mut self, cert: Vec<u8>) -> Self {
         let handle = spawn_blocking(move || {
-            let mut reader = Cursor::new(pem_cert);
+            let mut reader = Cursor::new(cert);
 
             Ok(load_certificates(&mut reader)?)
         });
@@ -118,8 +108,6 @@ impl Server {
     /// Load private key from file in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
-    #[cfg(feature = "rustls")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn private_key_file(mut self, path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_owned();
         let handle = spawn_blocking(move || {
@@ -135,8 +123,6 @@ impl Server {
     /// Load certificate(s) from file in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
-    #[cfg(feature = "rustls")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
     pub fn certificate_file(mut self, path: impl AsRef<Path>) -> Self {
         let path = path.as_ref().to_owned();
         let handle = spawn_blocking(move || {
@@ -161,15 +147,6 @@ impl Server {
         B::Data: Send,
         B::Error: std::error::Error + Send + Sync,
     {
-        #[cfg(not(feature = "rustls"))]
-        if self.addrs.is_empty() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "bind or bind_rustls is not set",
-            ));
-        }
-
-        #[cfg(feature = "rustls")]
         if self.addrs.is_empty() && self.tls.addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
@@ -187,7 +164,6 @@ impl Server {
             }
         }
 
-        #[cfg(feature = "rustls")]
         if !self.tls.addrs.is_empty() {
             let key = self.tls.pkey.ok_or(io::Error::new(
                 ErrorKind::InvalidInput,
@@ -223,25 +199,6 @@ impl Server {
     }
 }
 
-/// Shortcut for creating [`Server`](Server::new) and calling [`bind`](Server::bind) on it.
-pub fn bind<A>(addr: A) -> Server
-where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
-{
-    Server::new().bind(addr)
-}
-
-/// Shortcut for creating [`Server`](Server::new) and calling [`bind_rustls`](Server::bind_rustls) on it.
-#[cfg(feature = "rustls")]
-#[cfg_attr(docsrs, doc(cfg(feature = "rustls")))]
-pub fn bind_rustls<A>(addr: A) -> Server
-where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
-{
-    Server::new().bind_rustls(addr)
-}
-
-#[cfg(feature = "rustls")]
 fn load_private_key<R: BufRead + Seek>(reader: &mut R) -> io::Result<PrivateKey> {
     let key = pkcs8_private_keys(reader)
         .and_then(try_get_first_key)
@@ -254,7 +211,6 @@ fn load_private_key<R: BufRead + Seek>(reader: &mut R) -> io::Result<PrivateKey>
     Ok(key)
 }
 
-#[cfg(feature = "rustls")]
 fn try_get_first_key(mut keys: Vec<PrivateKey>) -> Result<PrivateKey, ()> {
     if !keys.is_empty() {
         Ok(keys.remove(0))
@@ -263,7 +219,6 @@ fn try_get_first_key(mut keys: Vec<PrivateKey>) -> Result<PrivateKey, ()> {
     }
 }
 
-#[cfg(feature = "rustls")]
 fn load_certificates(reader: &mut dyn BufRead) -> io::Result<Vec<Certificate>> {
     let certs =
         certs(reader).map_err(|_| io::Error::new(ErrorKind::InvalidData, "invalid certificate"))?;
@@ -271,50 +226,6 @@ fn load_certificates(reader: &mut dyn BufRead) -> io::Result<Vec<Certificate>> {
     Ok(certs)
 }
 
-fn collect_addrs(addrs: Vec<BoxedToSocketAddrs>) -> JoinHandle<io::Result<Vec<SocketAddr>>> {
-    spawn_blocking(move || {
-        let mut vec = Vec::new();
-
-        for addrs in addrs {
-            let mut iter = addrs.to_socket_addrs()?;
-
-            while let Some(addr) = iter.next() {
-                vec.push(addr);
-            }
-        }
-
-        Ok(vec)
-    })
-}
-
-fn http_task<S, B>(addr: SocketAddr, service: S) -> JoinHandle<io::Result<()>>
-where
-    S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Clone + 'static,
-    S::Error: std::error::Error + Send + Sync,
-    S::Future: Send,
-    B: Body + Send + 'static,
-    B::Data: Send,
-    B::Error: std::error::Error + Send + Sync,
-{
-    tokio::spawn(async move {
-        let listener = TcpListener::bind(addr).await?;
-
-        loop {
-            let (stream, addr) = listener.accept().await?;
-
-            let svc = AddExtension::new(service.clone(), addr);
-
-            tokio::spawn(async move {
-                let _ = Http::new()
-                    .serve_connection(stream, svc)
-                    .with_upgrades()
-                    .await;
-            });
-        }
-    })
-}
-
-#[cfg(feature = "rustls")]
 fn rustls_config(
     private_key: PrivateKey,
     certificates: Vec<Certificate>,
@@ -330,7 +241,6 @@ fn rustls_config(
     Ok(Arc::new(config))
 }
 
-#[cfg(feature = "rustls")]
 fn https_task<S, B>(
     addr: SocketAddr,
     acceptor: TlsAcceptor,
@@ -368,20 +278,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_bind_addresses() {
-        let server = bind("127.0.0.1:3000").bind("127.0.0.1:3001");
-
-        let addrs = collect_addrs(server.addrs).await.unwrap().unwrap();
-
-        assert_eq!(addrs, [addr("127.0.0.1:3000"), addr("127.0.0.1:3001")]);
-    }
-}
-
-#[cfg(all(test, feature = "rustls"))]
-mod tls_tests {
-    use super::*;
+    use crate::server::bind_rustls;
 
     // Self Signed Certificate
     const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
@@ -441,9 +338,9 @@ SfyHiEc0jh9LdjUlMvCXaB8=
     async fn test_bind_addresses() {
         let server = bind_rustls("127.0.0.1:3443").bind_rustls("127.0.0.1:3444");
 
-        let tls_addrs = collect_addrs(server.tls_addrs).await.unwrap().unwrap();
+        let addrs = collect_addrs(server.tls.addrs).await.unwrap().unwrap();
 
-        assert_eq!(tls_addrs, [addr("127.0.0.1:3443"), addr("127.0.0.1:3444")]);
+        assert_eq!(addrs, [addr("127.0.0.1:3443"), addr("127.0.0.1:3444")]);
     }
 
     #[tokio::test]
@@ -453,14 +350,13 @@ SfyHiEc0jh9LdjUlMvCXaB8=
 
         let server = Server::new().private_key(key).certificate(cert);
 
-        let private_key = server.private_key.unwrap().await.unwrap().unwrap();
-        let certificates = server.certificates.unwrap().await.unwrap().unwrap();
+        let private_key = server.tls.pkey.unwrap().await.unwrap().unwrap();
+        let certificates = server.tls.certs.unwrap().await.unwrap().unwrap();
 
         rustls_config(private_key, certificates).unwrap();
     }
-}
 
-#[cfg(test)]
-fn addr(s: &'static str) -> SocketAddr {
-    s.parse().unwrap()
+    fn addr(s: &'static str) -> SocketAddr {
+        s.parse().unwrap()
+    }
 }
