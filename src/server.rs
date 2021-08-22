@@ -37,6 +37,7 @@ use tower_service::Service;
 
 type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
+#[cfg(feature = "rustls")]
 #[derive(Default)]
 struct TlsConfig {
     addrs: Vec<BoxedToSocketAddrs>,
