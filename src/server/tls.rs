@@ -1,14 +1,9 @@
-use crate::server::{
-    collect_addrs,
-    http_task,
-    Server,
-    BoxedToSocketAddrs,
-};
+use crate::server::{collect_addrs, http_task, BoxedToSocketAddrs, Server};
 
 use std::{
-    io::{self, ErrorKind, BufRead, BufReader, Cursor, Seek, SeekFrom},
-    net::{SocketAddr, ToSocketAddrs},
     fs::File,
+    io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
+    net::{SocketAddr, ToSocketAddrs},
     path::Path,
     sync::Arc,
 };

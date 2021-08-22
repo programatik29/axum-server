@@ -28,7 +28,8 @@ use tokio::task::{spawn_blocking, JoinHandle};
 
 use tower_service::Service;
 
-pub(crate) type BoxedToSocketAddrs = Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
+pub(crate) type BoxedToSocketAddrs =
+    Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
 /// Configurable HTTP server, supporting HTTP/1.1 and HTTP2.
 #[derive(Default)]
@@ -160,7 +161,9 @@ where
     Server::new().bind_rustls(addr)
 }
 
-pub(crate) fn collect_addrs(addrs: Vec<BoxedToSocketAddrs>) -> JoinHandle<io::Result<Vec<SocketAddr>>> {
+pub(crate) fn collect_addrs(
+    addrs: Vec<BoxedToSocketAddrs>,
+) -> JoinHandle<io::Result<Vec<SocketAddr>>> {
     spawn_blocking(move || {
         let mut vec = Vec::new();
 

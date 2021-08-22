@@ -32,4 +32,4 @@ mod server;
 pub use server::{bind, Server};
 
 #[cfg(feature = "rustls")]
-pub use server::{tls, bind_rustls};
+pub use server::{bind_rustls, tls};
