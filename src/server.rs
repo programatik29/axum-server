@@ -82,7 +82,7 @@ impl Server {
         self
     }
 
-    /// Set a private key in PEM format.
+    /// Load private key in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "rustls")]
@@ -98,7 +98,7 @@ impl Server {
         self
     }
 
-    /// Set *concatenated certificate and chain*(fullchain) in PEM format.
+    /// Load certificate(s) in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "rustls")]
@@ -114,7 +114,7 @@ impl Server {
         self
     }
 
-    /// Set a private key from file in PEM format.
+    /// Load private key from file in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "rustls")]
@@ -131,7 +131,7 @@ impl Server {
         self
     }
 
-    /// Set *concatenated certificate and chain*(fullchain) from file in PEM format.
+    /// Load certificate(s) from file in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "rustls")]
