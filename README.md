@@ -6,8 +6,10 @@
 
 - Conveniently bind to any number of addresses.
 - Tls support through [`rustls`]. Only `pem` format is supported for certificates.
-- `Service`s created by [`axum`] can directly be `serve`d.
-- Although designed to be used with [`axum`], any `Service` that implements `Clone` can be `serve`d.
+- Access to client ip address from services/handlers.
+- Record incoming and outgoing bytes for each connection.
+- Services created by [`axum`] can directly be served.
+- Although designed to be used with [`axum`], any `Service` that implements `Clone` can be served.
 
 ## Usage example
 

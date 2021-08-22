@@ -7,7 +7,8 @@ description = "High level server designed to be used with axum framework."
 license = "MIT"
 
 [features]
-rustls = ["tokio-rustls"]
+record = []
+tls-rustls = ["rustls", "tokio-rustls"]
 
 [dependencies]
 futures-util = "0.3"
@@ -20,6 +21,7 @@ hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
 
 # optional dependencies
 
+rustls = { optional = true, version = "0.19" }
 tokio-rustls = { optional = true, version = "0.22" }
 
 [dev-dependencies]
