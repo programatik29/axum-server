@@ -9,7 +9,7 @@ license = "MIT"
 name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
-version = "0.1.0"
+version = "0.1.1"
 
 [features]
 record = []
@@ -32,3 +32,10 @@ tokio-rustls = { optional = true, version = "0.22" }
 [dev-dependencies]
 axum = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.playground]
+features = ["tls_rustls", "record"]
