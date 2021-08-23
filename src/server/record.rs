@@ -60,7 +60,7 @@ use tower_service::Service;
 
 use hyper::server::conn::Http;
 
-/// Contains recorded data.
+/// Type to access data that is being recorded in real-time.
 #[derive(Clone)]
 pub struct Recording {
     sent: Arc<AtomicUsize>,
@@ -69,11 +69,15 @@ pub struct Recording {
 
 impl Recording {
     /// Get recorded outgoing bytes.
+    ///
+    /// Data might be changed between function calls.
     pub fn bytes_sent(&self) -> usize {
         self.sent.load(Ordering::Acquire)
     }
 
     /// Get recorded incoming bytes.
+    ///
+    /// Data might be changed between function calls.
     pub fn bytes_received(&self) -> usize {
         self.received.load(Ordering::Acquire)
     }
