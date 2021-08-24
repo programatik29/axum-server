@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None.
 
+# 0.1.2 (24. August 2021)
+
+- Fixed an import issue when using `tls-rustls` feature.
+
 # 0.1.0 (23. August 2021)
 
 - Initial release.
