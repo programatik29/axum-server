@@ -27,9 +27,11 @@
 //! }
 //! ```
 
-use crate::server::record::RecordingHttpServer;
 use crate::server::serve::{Accept, HttpServer, Serve};
 use crate::server::{collect_addrs, BoxedToSocketAddrs, NoopAcceptor, Server};
+
+#[cfg(feature = "record")]
+use crate::server::record::RecordingHttpServer;
 
 use std::{
     fs::File,
