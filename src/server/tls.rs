@@ -1,4 +1,4 @@
-//! Tls types.
+//! Tls implementation for HTTP server.
 //!
 //! [`TlsServer`](TlsServer) can be used just like [`Server`](crate::server::Server) to serve apps.
 //!
