@@ -146,7 +146,7 @@ impl Server {
         TlsServer::from(self).bind_rustls(addr)
     }
 
-    /// Load private key in PEM format.
+    /// Set private key in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "tls-rustls")]
@@ -155,7 +155,7 @@ impl Server {
         TlsServer::from(self).private_key(key)
     }
 
-    /// Load certificate(s) in PEM format.
+    /// Set certificate(s) in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "tls-rustls")]
@@ -164,7 +164,7 @@ impl Server {
         TlsServer::from(self).certificate(cert)
     }
 
-    /// Load private key from file in PEM format.
+    /// Set private key from file in PEM format.
     ///
     /// Successive calls will overwrite latest private key.
     #[cfg(feature = "tls-rustls")]
@@ -173,7 +173,7 @@ impl Server {
         TlsServer::from(self).private_key_file(path)
     }
 
-    /// Load certificate(s) from file in PEM format.
+    /// Set certificate(s) from file in PEM format.
     ///
     /// Successive calls will overwrite latest certificate.
     #[cfg(feature = "tls-rustls")]
