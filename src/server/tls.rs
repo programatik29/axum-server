@@ -9,13 +9,13 @@
 //!     handler::get,
 //!     Router,
 //! };
-//! 
+//!
 //! use axum_server::Server;
-//! 
+//!
 //! #[tokio::main]
 //! async fn main() {
 //!     let app = Router::new().route("/", get(|| async { "Hello, world" }));
-//! 
+//!
 //!     Server::new()
 //!         .bind("127.0.0.1:3000")
 //!         .bind_rustls("127.0.0.1:3443")
@@ -27,34 +27,33 @@
 //! }
 //! ```
 
-use crate::server::serve::{Accept, HttpServer, Serve};
-use crate::server::{collect_addrs, BoxedToSocketAddrs, NoopAcceptor, Server};
-
 #[cfg(feature = "record")]
 use crate::server::record::RecordingHttpServer;
+
+use crate::server::serve::{Accept, HttpServer, Serve};
+use crate::server::{collect_addrs, BoxedToSocketAddrs, NoopAcceptor, Server};
 
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
     net::{SocketAddr, ToSocketAddrs},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
+
+use parking_lot::RwLock;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::spawn_blocking;
 
 use rustls::{
     internal::pemfile::certs, internal::pemfile::pkcs8_private_keys,
     internal::pemfile::rsa_private_keys, Certificate, NoClientAuth, PrivateKey, ServerConfig,
 };
 
-use tokio_rustls::{
-    server::TlsStream,
-    Accept as AcceptFuture, TlsAcceptor as CoreTlsAcceptor,
-};
+use tokio_rustls::{server::TlsStream, Accept as AcceptFuture, TlsAcceptor as CoreTlsAcceptor};
 
 use http::request::Request;
 use http::response::Response;
@@ -62,16 +61,177 @@ use http_body::Body;
 
 use tower_service::Service;
 
+/// A struct that can be passed to `TlsServer` to reload tls configuration.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use axum::{
+///     handler::get,
+///     Router,
+/// };
+/// use axum_server::tls::TlsLoader;
+/// use tokio::time::{sleep, Duration};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let app = Router::new().route("/", get(|| async { "Hello, World!" }));
+///
+///     let mut loader = TlsLoader::new();
+///
+///     // Must be loaded before passing.
+///     loader
+///         .private_key_file("certs/key.pem")
+///         .certificate_file("certs/cert.pem")
+///         .load()
+///         .await
+///         .unwrap();
+///
+///     tokio::spawn(reload_every_day(loader.clone()));
+///
+///     axum_server::bind_rustls("127.0.0.1:3000")
+///         .loader(loader)
+///         .serve(app)
+///         .await
+///         .unwrap();
+/// }
+///
+/// async fn reload_every_day(mut loader: TlsLoader) {
+///     loop {
+///         // Sleep first since certificates are loaded after loader is built.
+///         sleep(Duration::from_secs(3600 * 24)).await;
+///
+///         // Can be loaded with recent settings.
+///         // For example: Read previously provided file contents again.
+///         loader.load().await.unwrap();
+///
+///         // Can overwrite settings and load.
+///         loader
+///             .private_key_file("certs/private_key.pem")
+///             .certificate_file("certs/fullchain.pem")
+///             .load()
+///             .await
+///             .unwrap();
+///     }
+/// }
+/// ```
+#[derive(Default, Clone)]
+pub struct TlsLoader {
+    server_config: Option<Arc<ServerConfig>>,
+    private_key: Option<Vec<u8>>,
+    certificate: Option<Vec<u8>>,
+    private_key_path: Option<PathBuf>,
+    certificate_path: Option<PathBuf>,
+    acceptor: Option<Arc<RwLock<CoreTlsAcceptor>>>,
+}
+
+impl TlsLoader {
+    /// Create a `TlsLoader`.
+    pub fn new() -> Self {
+        TlsLoader::default()
+    }
+
+    /// Provide [`ServerConfig`](ServerConfig) containing private key and certificate(s).
+    ///
+    /// When this value is set, other tls configurations are ignored.
+    ///
+    /// Successive calls will overwrite last value.
+    pub fn config(&mut self, config: Arc<ServerConfig>) -> &mut Self {
+        self.server_config = Some(config);
+        self
+    }
+
+    /// Set private key in PEM format.
+    ///
+    /// Successive calls will overwrite last private key.
+    pub fn private_key(&mut self, private_key: Vec<u8>) -> &mut Self {
+        self.private_key = Some(private_key);
+        self
+    }
+
+    /// Set certificate(s) in PEM format.
+    ///
+    /// Successive calls will overwrite last certificate.
+    pub fn certificate(&mut self, certificate: Vec<u8>) -> &mut Self {
+        self.certificate = Some(certificate);
+        self
+    }
+
+    /// Set private key from file in PEM format.
+    ///
+    /// Successive calls will overwrite last private key.
+    pub fn private_key_file(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        self.private_key_path = Some(path.as_ref().to_owned());
+        self
+    }
+
+    /// Set certificate(s) from file in PEM format.
+    ///
+    /// Successive calls will overwrite last certificate.
+    pub fn certificate_file(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        self.certificate_path = Some(path.as_ref().to_owned());
+        self
+    }
+
+    /// Load private key or certificate(s).
+    ///
+    /// Will apply to connections after this function is called.
+    pub async fn load(&mut self) -> io::Result<()> {
+        let config = self.get_server_config().await?;
+        let acceptor = CoreTlsAcceptor::from(config);
+
+        match &self.acceptor {
+            Some(lock) => *lock.write() = acceptor,
+            None => self.acceptor = Some(Arc::new(RwLock::new(acceptor))),
+        }
+
+        Ok(())
+    }
+
+    async fn get_acceptor(&mut self) -> io::Result<Arc<RwLock<CoreTlsAcceptor>>> {
+        match &self.acceptor {
+            Some(acceptor) => Ok(acceptor.clone()),
+            None => Err(invalid_input("`TlsLoader` is not loaded.")),
+        }
+    }
+
+    async fn get_server_config(&mut self) -> io::Result<Arc<ServerConfig>> {
+        if let Some(config) = &self.server_config {
+            return Ok(config.clone());
+        }
+
+        let key = match &self.private_key {
+            Some(value) => pkey_from_value(&value).await?,
+            None => match &self.private_key_path {
+                Some(path) => pkey_from_file(&path).await?,
+                None => return Err(invalid_input("private_key is not set")),
+            },
+        };
+
+        let certs = match &self.certificate {
+            Some(value) => cert_from_value(&value).await?,
+            None => match &self.certificate_path {
+                Some(path) => cert_from_file(&path).await?,
+                None => return Err(invalid_input("certificate is not set")),
+            },
+        };
+
+        Ok(rustls_config(key, certs)?)
+    }
+}
+
 /// Configurable HTTP and HTTPS server, supporting HTTP/1.1 and HTTP2.
 ///
 /// See [module](crate::server::tls) page for examples.
 #[derive(Default)]
 pub struct TlsServer {
     addrs: Vec<BoxedToSocketAddrs>,
-    tls: TlsConfig,
+    tls_addrs: Vec<BoxedToSocketAddrs>,
+    tls_loader: TlsLoader,
 }
 
 impl TlsServer {
+    /// Create a new `TlsServer`.
     pub fn new() -> Self {
         TlsServer::default()
     }
@@ -92,65 +252,57 @@ impl TlsServer {
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
-        self.tls.addrs.push(Box::new(addr));
+        self.tls_addrs.push(Box::new(addr));
         self
     }
 
-    /// Load private key in PEM format.
+    /// Provide a **loaded** [`TlsLoader`](TlsLoader).
     ///
-    /// Successive calls will overwrite latest private key.
-    pub fn private_key(mut self, key: Vec<u8>) -> Self {
-        let handle = spawn_blocking(move || {
-            let mut reader = Cursor::new(key);
-
-            Ok(load_private_key(&mut reader)?)
-        });
-
-        self.tls.pkey = Some(handle);
+    /// This will overwrite any previously set private key and certificate(s) with its own ones.
+    pub fn loader(mut self, loader: TlsLoader) -> Self {
+        self.tls_loader = loader;
         self
     }
 
-    /// Load certificate(s) in PEM format.
+    /// Provide [`ServerConfig`](ServerConfig) containing private key and certificate(s).
     ///
-    /// Successive calls will overwrite latest certificate.
-    pub fn certificate(mut self, cert: Vec<u8>) -> Self {
-        let handle = spawn_blocking(move || {
-            let mut reader = Cursor::new(cert);
-
-            Ok(load_certificates(&mut reader)?)
-        });
-
-        self.tls.certs = Some(handle);
+    /// When this value is set, other tls configurations are ignored.
+    ///
+    /// Successive calls will overwrite last value.
+    pub fn config(mut self, config: Arc<ServerConfig>) -> Self {
+        self.tls_loader.config(config);
         self
     }
 
-    /// Load private key from file in PEM format.
+    /// Set private key in PEM format.
     ///
-    /// Successive calls will overwrite latest private key.
+    /// Successive calls will overwrite last private key.
+    pub fn private_key(mut self, private_key: Vec<u8>) -> Self {
+        self.tls_loader.private_key(private_key);
+        self
+    }
+
+    /// Set certificate(s) in PEM format.
+    ///
+    /// Successive calls will overwrite last certificate.
+    pub fn certificate(mut self, certificate: Vec<u8>) -> Self {
+        self.tls_loader.certificate(certificate);
+        self
+    }
+
+    /// Set private key from file in PEM format.
+    ///
+    /// Successive calls will overwrite last private key.
     pub fn private_key_file(mut self, path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref().to_owned();
-        let handle = spawn_blocking(move || {
-            let mut reader = BufReader::new(File::open(path)?);
-
-            Ok(load_private_key(&mut reader)?)
-        });
-
-        self.tls.pkey = Some(handle);
+        self.tls_loader.private_key_file(path);
         self
     }
 
-    /// Load certificate(s) from file in PEM format.
+    /// Set certificate(s) from file in PEM format.
     ///
-    /// Successive calls will overwrite latest certificate.
+    /// Successive calls will overwrite last certificate.
     pub fn certificate_file(mut self, path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref().to_owned();
-        let handle = spawn_blocking(move || {
-            let mut reader = BufReader::new(File::open(path)?);
-
-            Ok(load_certificates(&mut reader)?)
-        });
-
-        self.tls.certs = Some(handle);
+        self.tls_loader.certificate_file(path);
         self
     }
 
@@ -171,12 +323,7 @@ impl TlsServer {
 
         self.custom_serve(
             move || HttpServer::new(NoopAcceptor::new(), service.clone()),
-            move |config| {
-                HttpServer::new(
-                    TlsAcceptor::new(CoreTlsAcceptor::from(config)),
-                    service2.clone(),
-                )
-            },
+            move |acceptor| HttpServer::new(TlsAcceptor::new(acceptor), service2.clone()),
         )
         .await
     }
@@ -205,28 +352,23 @@ impl TlsServer {
 
         self.custom_serve(
             move || RecordingHttpServer::new(NoopAcceptor::new(), service.clone()),
-            move |config| {
-                RecordingHttpServer::new(
-                    TlsAcceptor::new(CoreTlsAcceptor::from(config)),
-                    service2.clone(),
-                )
-            },
+            move |acceptor| RecordingHttpServer::new(TlsAcceptor::new(acceptor), service2.clone()),
         )
         .await
     }
 
     async fn custom_serve<F1, A1, F2, A2>(
-        self,
+        mut self,
         make_server: F1,
         make_tls_server: F2,
     ) -> io::Result<()>
     where
         F1: Fn() -> A1,
         A1: Serve + Send + Sync + 'static,
-        F2: Fn(Arc<ServerConfig>) -> A2,
+        F2: Fn(Arc<RwLock<CoreTlsAcceptor>>) -> A2,
         A2: Serve + Send + Sync + 'static,
     {
-        if self.addrs.is_empty() && self.tls.addrs.is_empty() {
+        if self.addrs.is_empty() && self.tls_addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 "bind or bind_rustls is not set",
@@ -245,23 +387,11 @@ impl TlsServer {
             }
         }
 
-        if !self.tls.addrs.is_empty() {
-            let key = self.tls.pkey.ok_or(io::Error::new(
-                ErrorKind::InvalidInput,
-                "private_key or private_key_file is not set",
-            ))?;
-            let key = key.await.unwrap()?;
+        if !self.tls_addrs.is_empty() {
+            let acceptor = self.tls_loader.get_acceptor().await?;
+            let http_server = make_tls_server(acceptor);
 
-            let certs = self.tls.certs.ok_or(io::Error::new(
-                ErrorKind::InvalidInput,
-                "certificates or certificates_file is not set",
-            ))?;
-            let certs = certs.await.unwrap()?;
-
-            let config = rustls_config(key, certs)?;
-            let http_server = make_tls_server(config);
-
-            let addrs = collect_addrs(self.tls.addrs).await.unwrap()?;
+            let addrs = collect_addrs(self.tls_addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(http_server.serve_on(addr));
@@ -282,41 +412,54 @@ impl TlsServer {
 
 impl From<Server> for TlsServer {
     fn from(server: Server) -> Self {
-        Self {
-            addrs: server.addrs,
-            tls: TlsConfig::default(),
-        }
+        let mut tls_server = TlsServer::default();
+        tls_server.addrs = server.addrs;
+        tls_server
     }
 }
 
-#[derive(Default)]
-struct TlsConfig {
-    addrs: Vec<BoxedToSocketAddrs>,
-    pkey: Option<JoinHandle<io::Result<PrivateKey>>>,
-    certs: Option<JoinHandle<io::Result<Vec<Certificate>>>>,
+async fn pkey_from_value(key: &[u8]) -> io::Result<PrivateKey> {
+    let key = key.to_vec();
+    spawn_blocking(move || {
+        let mut reader = Cursor::new(key);
+
+        Ok(load_private_key(&mut reader)?)
+    })
+    .await
+    .unwrap()
 }
 
-#[derive(Clone)]
-pub(crate) struct TlsAcceptor {
-    inner: CoreTlsAcceptor,
+async fn cert_from_value(cert: &[u8]) -> io::Result<Vec<Certificate>> {
+    let cert = cert.to_vec();
+    spawn_blocking(move || {
+        let mut reader = Cursor::new(cert);
+
+        Ok(load_certificates(&mut reader)?)
+    })
+    .await
+    .unwrap()
 }
 
-impl TlsAcceptor {
-    fn new(inner: CoreTlsAcceptor) -> Self {
-        Self { inner }
-    }
+async fn pkey_from_file(path: &Path) -> io::Result<PrivateKey> {
+    let path = path.to_owned();
+    spawn_blocking(move || {
+        let mut reader = BufReader::new(File::open(path)?);
+
+        Ok(load_private_key(&mut reader)?)
+    })
+    .await
+    .unwrap()
 }
 
-impl<I> Accept<I> for TlsAcceptor
-where
-    I: AsyncRead + AsyncWrite + Unpin,
-{
-    type Stream = TlsStream<I>;
-    type Future = AcceptFuture<I>;
+async fn cert_from_file(path: &Path) -> io::Result<Vec<Certificate>> {
+    let path = path.to_owned();
+    spawn_blocking(move || {
+        let mut reader = BufReader::new(File::open(path)?);
 
-    fn accept(&self, stream: I) -> Self::Future {
-        self.inner.accept(stream)
-    }
+        Ok(load_certificates(&mut reader)?)
+    })
+    .await
+    .unwrap()
 }
 
 fn load_private_key<R: BufRead + Seek>(reader: &mut R) -> io::Result<PrivateKey> {
@@ -359,6 +502,33 @@ fn rustls_config(
     config.set_protocols(&[b"h2".to_vec(), b"http/1.1".to_vec()]);
 
     Ok(Arc::new(config))
+}
+
+fn invalid_input(msg: &'static str) -> io::Error {
+    io::Error::new(ErrorKind::InvalidInput, msg)
+}
+
+#[derive(Clone)]
+pub(crate) struct TlsAcceptor {
+    inner: Arc<RwLock<CoreTlsAcceptor>>,
+}
+
+impl TlsAcceptor {
+    fn new(inner: Arc<RwLock<CoreTlsAcceptor>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I> Accept<I> for TlsAcceptor
+where
+    I: AsyncRead + AsyncWrite + Unpin,
+{
+    type Stream = TlsStream<I>;
+    type Future = AcceptFuture<I>;
+
+    fn accept(&self, stream: I) -> Self::Future {
+        self.inner.read().accept(stream)
+    }
 }
 
 #[cfg(test)]
@@ -424,7 +594,7 @@ SfyHiEc0jh9LdjUlMvCXaB8=
     async fn test_bind_addresses() {
         let server = bind_rustls("127.0.0.1:3443").bind_rustls("127.0.0.1:3444");
 
-        let addrs = collect_addrs(server.tls.addrs).await.unwrap().unwrap();
+        let addrs = collect_addrs(server.tls_addrs).await.unwrap().unwrap();
 
         assert_eq!(addrs, [addr("127.0.0.1:3443"), addr("127.0.0.1:3444")]);
     }
@@ -436,10 +606,13 @@ SfyHiEc0jh9LdjUlMvCXaB8=
 
         let server = Server::new().private_key(key).certificate(cert);
 
-        let private_key = server.tls.pkey.unwrap().await.unwrap().unwrap();
-        let certificates = server.tls.certs.unwrap().await.unwrap().unwrap();
+        let private_key = server.tls_loader.private_key.unwrap();
+        let certificate = server.tls_loader.certificate.unwrap();
 
-        rustls_config(private_key, certificates).unwrap();
+        let private_key = pkey_from_value(private_key).await.unwrap();
+        let certificate = cert_from_value(certificate).await.unwrap();
+
+        rustls_config(private_key, certificate).unwrap();
     }
 
     fn addr(s: &'static str) -> SocketAddr {
