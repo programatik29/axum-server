@@ -11,13 +11,16 @@ pub mod record;
 use serve::{Accept, HttpServer, Serve};
 
 #[cfg(feature = "tls-rustls")]
-use tls::TlsServer;
+use tls::{TlsLoader, TlsServer};
 
 #[cfg(feature = "record")]
 use record::RecordingHttpServer;
 
 #[cfg(feature = "tls-rustls")]
 use std::path::Path;
+
+#[cfg(feature = "tls-rustls")]
+use rustls::ServerConfig;
 
 use std::io;
 use std::io::ErrorKind;
@@ -146,9 +149,29 @@ impl Server {
         TlsServer::from(self).bind_rustls(addr)
     }
 
+    /// Provide a **loaded** [`TlsLoader`](TlsLoader).
+    ///
+    /// This will overwrite any previously set private key and certificate(s) with its own ones.
+    #[cfg(feature = "tls-rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    pub fn loader(self, config: TlsLoader) -> TlsServer {
+        TlsServer::from(self).loader(config)
+    }
+
+    /// Provide [`ServerConfig`](ServerConfig) containing private key and certificate(s).
+    ///
+    /// When this value is set, other tls configurations are ignored.
+    ///
+    /// Successive calls will overwrite last value.
+    #[cfg(feature = "tls-rustls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    pub fn tls_config(self, config: Arc<ServerConfig>) -> TlsServer {
+        TlsServer::from(self).tls_config(config)
+    }
+
     /// Set private key in PEM format.
     ///
-    /// Successive calls will overwrite latest private key.
+    /// Successive calls will overwrite last private key.
     #[cfg(feature = "tls-rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
     pub fn private_key(self, key: Vec<u8>) -> TlsServer {
@@ -157,7 +180,7 @@ impl Server {
 
     /// Set certificate(s) in PEM format.
     ///
-    /// Successive calls will overwrite latest certificate.
+    /// Successive calls will overwrite last certificate.
     #[cfg(feature = "tls-rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
     pub fn certificate(self, cert: Vec<u8>) -> TlsServer {
@@ -166,7 +189,7 @@ impl Server {
 
     /// Set private key from file in PEM format.
     ///
-    /// Successive calls will overwrite latest private key.
+    /// Successive calls will overwrite last private key.
     #[cfg(feature = "tls-rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
     pub fn private_key_file(self, path: impl AsRef<Path>) -> TlsServer {
@@ -175,7 +198,7 @@ impl Server {
 
     /// Set certificate(s) from file in PEM format.
     ///
-    /// Successive calls will overwrite latest certificate.
+    /// Successive calls will overwrite last certificate.
     #[cfg(feature = "tls-rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
     pub fn certificate_file(self, path: impl AsRef<Path>) -> TlsServer {

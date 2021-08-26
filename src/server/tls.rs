@@ -276,7 +276,7 @@ impl TlsServer {
     /// When this value is set, other tls configurations are ignored.
     ///
     /// Successive calls will overwrite last value.
-    pub fn config(mut self, config: Arc<ServerConfig>) -> Self {
+    pub fn tls_config(mut self, config: Arc<ServerConfig>) -> Self {
         self.tls_loader.config(config);
         self
     }
