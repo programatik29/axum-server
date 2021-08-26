@@ -1,3 +1,7 @@
+[![License](https://img.shields.io/crates/l/axum-server)](https://choosealicense.com/licenses/mit/)
+[![Docs - Master](https://img.shields.io/badge/docs-master-blue)](https://programatik29.github.io/axum-server/docs/axum_server/)
+[![Docs - Stable](https://img.shields.io/crates/v/axum-server?color=blue&label=docs)](https://docs.rs/axum-server/)
+
 # axum-server
 
 `axum-server` is a [`hyper`] server implementation designed to be used with [`axum`] framework.
