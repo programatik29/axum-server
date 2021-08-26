@@ -1,3 +1,5 @@
+use crate::server::Handle;
+
 use std::io;
 use std::net::SocketAddr;
 
@@ -28,14 +30,24 @@ pub trait Serve {
     fn serve_on(&self, addr: SocketAddr) -> JoinHandle<io::Result<()>>;
 }
 
+pub enum Mode {
+    Shutdown,
+    Graceful,
+}
+
 pub struct HttpServer<A, S> {
     acceptor: A,
     service: S,
+    handle: Handle,
 }
 
 impl<A, S> HttpServer<A, S> {
-    pub fn new(acceptor: A, service: S) -> Self {
-        Self { acceptor, service }
+    pub fn new(acceptor: A, service: S, handle: Handle) -> Self {
+        Self {
+            acceptor,
+            service,
+            handle,
+        }
     }
 }
 
@@ -54,17 +66,26 @@ where
     fn serve_on(&self, addr: SocketAddr) -> JoinHandle<io::Result<()>> {
         let acceptor = self.acceptor.clone();
         let service = self.service.clone();
+        let handle = self.handle.clone();
 
         tokio::spawn(async move {
             let listener = TcpListener::bind(addr).await?;
+            handle.listening.notify_waiters();
 
-            loop {
-                let (stream, addr) = listener.accept().await?;
+            let mut connections = Vec::new();
+            let mode;
+
+            mode = loop {
+                let (stream, addr) = tokio::select! {
+                    result = listener.accept() => result?,
+                    _ = handle.shutdown.notified() => break Mode::Shutdown,
+                    _ = handle.graceful_shutdown.notified() => break Mode::Graceful,
+                };
                 let acceptor = acceptor.clone();
 
                 let svc = AddExtension::new(service.clone(), addr);
 
-                tokio::spawn(async move {
+                let conn = tokio::spawn(async move {
                     if let Ok(stream) = acceptor.accept(stream).await {
                         let _ = Http::new()
                             .serve_connection(stream, svc)
@@ -72,7 +93,31 @@ where
                             .await;
                     }
                 });
+
+                connections.push(conn);
+            };
+
+            match mode {
+                Mode::Shutdown => shutdown_conns(connections),
+                Mode::Graceful => tokio::select! {
+                    _ = handle.shutdown.notified() => shutdown_conns(connections),
+                    _ = wait_conns(&mut connections) => (),
+                },
             }
+
+            Ok(())
         })
+    }
+}
+
+pub fn shutdown_conns(connections: Vec<JoinHandle<()>>) {
+    for conn in connections {
+        conn.abort();
+    }
+}
+
+pub async fn wait_conns(connections: &mut Vec<JoinHandle<()>>) {
+    for conn in connections {
+        let _ = conn.await;
     }
 }

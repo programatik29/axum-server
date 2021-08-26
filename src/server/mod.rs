@@ -22,11 +22,13 @@ use std::path::Path;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
 
 use futures_util::future::Ready;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Notify;
 use tokio::task::{spawn_blocking, JoinHandle};
 
 use tower_service::Service;
@@ -38,6 +40,72 @@ use http_body::Body;
 pub(crate) type BoxedToSocketAddrs =
     Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
+/// A struct that can be passed to a server for additional utilites.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use axum::{
+///     handler::get,
+///     Router,
+/// };
+/// use axum_server::Handle;
+/// use tokio::time::{sleep, Duration};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let app = Router::new().route("/", get(|| async { "Hello, World!" }));
+///
+///     let handle = Handle::new();
+///
+///     tokio::spawn(shutdown_in_twenty_secs(handle.clone()));
+///
+///     axum_server::bind("127.0.0.1:3000")
+///         .handle(handle)
+///         .serve(app)
+///         .await
+///         .unwrap();
+/// }
+///
+/// async fn shutdown_in_twenty_secs(handle: Handle) {
+///     sleep(Duration::from_secs(20)).await;
+///
+///     handle.shutdown();
+/// }
+/// ```
+#[derive(Default, Clone)]
+pub struct Handle {
+    listening: Arc<Notify>,
+    shutdown: Arc<Notify>,
+    graceful_shutdown: Arc<Notify>,
+}
+
+impl Handle {
+    /// Create a `Handle`.
+    pub fn new() -> Self {
+        Handle::default()
+    }
+
+    /// Wait until server starts listening.
+    pub async fn listening(&self) {
+        self.listening.notified().await;
+    }
+
+    /// Signal server to shut down.
+    ///
+    /// [`serve`](Server::serve) function will return when shutdown is complete.
+    pub fn shutdown(&self) {
+        self.shutdown.notify_waiters();
+    }
+
+    /// Signal server to gracefully shut down.
+    ///
+    /// [`serve`](Server::serve) function will return when graceful shutdown is complete.
+    pub fn graceful_shutdown(&self) {
+        self.graceful_shutdown.notify_waiters();
+    }
+}
+
 /// Configurable HTTP server, supporting HTTP/1.1 and HTTP2.
 ///
 /// `Server` can conveniently be turned into a [`TlsServer`](TlsServer) with related methods.
@@ -46,6 +114,7 @@ pub(crate) type BoxedToSocketAddrs =
 #[derive(Default)]
 pub struct Server {
     addrs: Vec<BoxedToSocketAddrs>,
+    handle: Handle,
 }
 
 impl Server {
@@ -113,6 +182,14 @@ impl Server {
         TlsServer::from(self).certificate_file(path)
     }
 
+    /// Provide a `Handle`.
+    ///
+    /// Successive calls will overwrite last `Handle`.
+    pub fn handle(mut self, handle: Handle) -> Self {
+        self.handle = handle;
+        self
+    }
+
     /// Serve provided cloneable service on all binded addresses.
     ///
     /// If accepting connection fails in any one of binded addresses, listening in all
@@ -126,8 +203,10 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move || HttpServer::new(NoopAcceptor::new(), service.clone()))
-            .await
+        self.custom_serve(move |handle| {
+            HttpServer::new(NoopAcceptor::new(), service.clone(), handle)
+        })
+        .await
     }
 
     /// Serve provided cloneable service on all binded addresses.
@@ -150,13 +229,15 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move || RecordingHttpServer::new(NoopAcceptor::new(), service.clone()))
-            .await
+        self.custom_serve(move |handle| {
+            RecordingHttpServer::new(NoopAcceptor::new(), service.clone(), handle)
+        })
+        .await
     }
 
     async fn custom_serve<F, A>(self, make_server: F) -> io::Result<()>
     where
-        F: Fn() -> A,
+        F: Fn(Handle) -> A,
         A: Serve + Send + Sync + 'static,
     {
         if self.addrs.is_empty() {
@@ -169,7 +250,7 @@ impl Server {
         let mut fut_list = FuturesUnordered::new();
 
         if !self.addrs.is_empty() {
-            let http_server = make_server();
+            let http_server = make_server(self.handle);
 
             let addrs = collect_addrs(self.addrs).await.unwrap()?;
 
