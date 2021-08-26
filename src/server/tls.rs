@@ -225,7 +225,7 @@ impl TlsLoader {
 /// See [module](crate::server::tls) page for examples.
 #[derive(Default)]
 pub struct TlsServer {
-    addrs: Vec<BoxedToSocketAddrs>,
+    server: Server,
     tls_addrs: Vec<BoxedToSocketAddrs>,
     tls_loader: TlsLoader,
 }
@@ -241,7 +241,7 @@ impl TlsServer {
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
-        self.addrs.push(Box::new(addr));
+        self.server = self.server.bind(addr);
         self
     }
 
@@ -368,19 +368,19 @@ impl TlsServer {
         F2: Fn(Arc<RwLock<CoreTlsAcceptor>>) -> A2,
         A2: Serve + Send + Sync + 'static,
     {
-        if self.addrs.is_empty() && self.tls_addrs.is_empty() {
+        if self.server.addrs.is_empty() && self.tls_addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                "bind or bind_rustls is not set",
+                "no address provided to bind",
             ));
         }
 
         let mut fut_list = FuturesUnordered::new();
 
-        if !self.addrs.is_empty() {
+        if !self.server.addrs.is_empty() {
             let http_server = make_server();
 
-            let addrs = collect_addrs(self.addrs).await.unwrap()?;
+            let addrs = collect_addrs(self.server.addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(http_server.serve_on(addr));
@@ -413,7 +413,7 @@ impl TlsServer {
 impl From<Server> for TlsServer {
     fn from(server: Server) -> Self {
         let mut tls_server = TlsServer::default();
-        tls_server.addrs = server.addrs;
+        tls_server.server = server;
         tls_server
     }
 }

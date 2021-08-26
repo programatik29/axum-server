@@ -162,7 +162,7 @@ impl Server {
         if self.addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                "bind or bind_rustls is not set",
+                "no address provided to bind",
             ));
         }
 
