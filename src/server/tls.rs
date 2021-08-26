@@ -196,22 +196,22 @@ impl TlsLoader {
     }
 
     async fn get_server_config(&mut self) -> io::Result<Arc<ServerConfig>> {
-        if let Some(config) = self.server_config.take() {
-            return Ok(config);
+        if let Some(config) = &self.server_config {
+            return Ok(config.clone());
         }
 
-        let key = match self.private_key.take() {
-            Some(value) => pkey_from_value(value).await?,
-            None => match self.private_key_path.take() {
-                Some(path) => pkey_from_file(path).await?,
+        let key = match &self.private_key {
+            Some(value) => pkey_from_value(&value).await?,
+            None => match &self.private_key_path {
+                Some(path) => pkey_from_file(&path).await?,
                 None => return Err(invalid_input("private_key is not set")),
             },
         };
 
-        let certs = match self.certificate.take() {
-            Some(value) => cert_from_value(value).await?,
-            None => match self.certificate_path.take() {
-                Some(path) => cert_from_file(path).await?,
+        let certs = match &self.certificate {
+            Some(value) => cert_from_value(&value).await?,
+            None => match &self.certificate_path {
+                Some(path) => cert_from_file(&path).await?,
                 None => return Err(invalid_input("certificate is not set")),
             },
         };
@@ -418,7 +418,8 @@ impl From<Server> for TlsServer {
     }
 }
 
-async fn pkey_from_value(key: Vec<u8>) -> io::Result<PrivateKey> {
+async fn pkey_from_value(key: &[u8]) -> io::Result<PrivateKey> {
+    let key = key.to_vec();
     spawn_blocking(move || {
         let mut reader = Cursor::new(key);
 
@@ -428,7 +429,8 @@ async fn pkey_from_value(key: Vec<u8>) -> io::Result<PrivateKey> {
     .unwrap()
 }
 
-async fn cert_from_value(cert: Vec<u8>) -> io::Result<Vec<Certificate>> {
+async fn cert_from_value(cert: &[u8]) -> io::Result<Vec<Certificate>> {
+    let cert = cert.to_vec();
     spawn_blocking(move || {
         let mut reader = Cursor::new(cert);
 
@@ -438,7 +440,8 @@ async fn cert_from_value(cert: Vec<u8>) -> io::Result<Vec<Certificate>> {
     .unwrap()
 }
 
-async fn pkey_from_file(path: PathBuf) -> io::Result<PrivateKey> {
+async fn pkey_from_file(path: &Path) -> io::Result<PrivateKey> {
+    let path = path.to_owned();
     spawn_blocking(move || {
         let mut reader = BufReader::new(File::open(path)?);
 
@@ -448,7 +451,8 @@ async fn pkey_from_file(path: PathBuf) -> io::Result<PrivateKey> {
     .unwrap()
 }
 
-async fn cert_from_file(path: PathBuf) -> io::Result<Vec<Certificate>> {
+async fn cert_from_file(path: &Path) -> io::Result<Vec<Certificate>> {
+    let path = path.to_owned();
     spawn_blocking(move || {
         let mut reader = BufReader::new(File::open(path)?);
 
