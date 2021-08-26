@@ -21,7 +21,7 @@
 //!         .bind_rustls("127.0.0.1:3443")
 //!         .private_key_file("certs/key.pem")
 //!         .certificate_file("certs/cert.pem")
-//!         .serve_and_record(app)
+//!         .serve(app)
 //!         .await
 //!         .unwrap();
 //! }
@@ -31,7 +31,7 @@
 use crate::server::record::RecordingHttpServer;
 
 use crate::server::serve::{Accept, HttpServer, Serve};
-use crate::server::{collect_addrs, BoxedToSocketAddrs, NoopAcceptor, Server};
+use crate::server::{collect_addrs, BoxedToSocketAddrs, Handle, NoopAcceptor, Server};
 
 use std::{
     fs::File,
@@ -225,7 +225,7 @@ impl TlsLoader {
 /// See [module](crate::server::tls) page for examples.
 #[derive(Default)]
 pub struct TlsServer {
-    addrs: Vec<BoxedToSocketAddrs>,
+    server: Server,
     tls_addrs: Vec<BoxedToSocketAddrs>,
     tls_loader: TlsLoader,
 }
@@ -241,7 +241,14 @@ impl TlsServer {
     where
         A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
     {
-        self.addrs.push(Box::new(addr));
+        self.server = self.server.bind(addr);
+        self
+    }
+    /// Provide a `Handle`.
+    ///
+    /// Successive calls will overwrite last `Handle`.
+    pub fn handle(mut self, handle: Handle) -> Self {
+        self.server = self.server.handle(handle);
         self
     }
 
@@ -322,8 +329,10 @@ impl TlsServer {
         let service2 = service.clone();
 
         self.custom_serve(
-            move || HttpServer::new(NoopAcceptor::new(), service.clone()),
-            move |acceptor| HttpServer::new(TlsAcceptor::new(acceptor), service2.clone()),
+            move |handle| HttpServer::new(NoopAcceptor::new(), service.clone(), handle),
+            move |handle, acceptor| {
+                HttpServer::new(TlsAcceptor::new(acceptor), service2.clone(), handle)
+            },
         )
         .await
     }
@@ -351,8 +360,10 @@ impl TlsServer {
         let service2 = service.clone();
 
         self.custom_serve(
-            move || RecordingHttpServer::new(NoopAcceptor::new(), service.clone()),
-            move |acceptor| RecordingHttpServer::new(TlsAcceptor::new(acceptor), service2.clone()),
+            move |handle| RecordingHttpServer::new(NoopAcceptor::new(), service.clone(), handle),
+            move |handle, acceptor| {
+                RecordingHttpServer::new(TlsAcceptor::new(acceptor), service2.clone(), handle)
+            },
         )
         .await
     }
@@ -363,24 +374,24 @@ impl TlsServer {
         make_tls_server: F2,
     ) -> io::Result<()>
     where
-        F1: Fn() -> A1,
+        F1: Fn(Handle) -> A1,
         A1: Serve + Send + Sync + 'static,
-        F2: Fn(Arc<RwLock<CoreTlsAcceptor>>) -> A2,
+        F2: Fn(Handle, Arc<RwLock<CoreTlsAcceptor>>) -> A2,
         A2: Serve + Send + Sync + 'static,
     {
-        if self.addrs.is_empty() && self.tls_addrs.is_empty() {
+        if self.server.addrs.is_empty() && self.tls_addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                "bind or bind_rustls is not set",
+                "no address provided to bind",
             ));
         }
 
         let mut fut_list = FuturesUnordered::new();
 
-        if !self.addrs.is_empty() {
-            let http_server = make_server();
+        if !self.server.addrs.is_empty() {
+            let http_server = make_server(self.server.handle.clone());
 
-            let addrs = collect_addrs(self.addrs).await.unwrap()?;
+            let addrs = collect_addrs(self.server.addrs).await.unwrap()?;
 
             for addr in addrs {
                 fut_list.push(http_server.serve_on(addr));
@@ -389,7 +400,7 @@ impl TlsServer {
 
         if !self.tls_addrs.is_empty() {
             let acceptor = self.tls_loader.get_acceptor().await?;
-            let http_server = make_tls_server(acceptor);
+            let http_server = make_tls_server(self.server.handle, acceptor);
 
             let addrs = collect_addrs(self.tls_addrs).await.unwrap()?;
 
@@ -413,7 +424,7 @@ impl TlsServer {
 impl From<Server> for TlsServer {
     fn from(server: Server) -> Self {
         let mut tls_server = TlsServer::default();
-        tls_server.addrs = server.addrs;
+        tls_server.server = server;
         tls_server
     }
 }
@@ -609,8 +620,8 @@ SfyHiEc0jh9LdjUlMvCXaB8=
         let private_key = server.tls_loader.private_key.unwrap();
         let certificate = server.tls_loader.certificate.unwrap();
 
-        let private_key = pkey_from_value(private_key).await.unwrap();
-        let certificate = cert_from_value(certificate).await.unwrap();
+        let private_key = pkey_from_value(&private_key).await.unwrap();
+        let certificate = cert_from_value(&certificate).await.unwrap();
 
         rustls_config(private_key, certificate).unwrap();
     }

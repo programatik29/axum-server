@@ -38,7 +38,8 @@
 //! }
 //! ```
 
-use crate::server::serve::{Accept, Serve};
+use crate::server::serve::{shutdown_conns, wait_conns, Accept, Mode, Serve};
+use crate::server::Handle;
 
 use std::io;
 use std::net::SocketAddr;
@@ -86,11 +87,16 @@ impl Recording {
 pub(crate) struct RecordingHttpServer<A, S> {
     acceptor: A,
     service: S,
+    handle: Handle,
 }
 
 impl<A, S> RecordingHttpServer<A, S> {
-    pub fn new(acceptor: A, service: S) -> Self {
-        Self { acceptor, service }
+    pub fn new(acceptor: A, service: S, handle: Handle) -> Self {
+        Self {
+            acceptor,
+            service,
+            handle,
+        }
     }
 }
 
@@ -109,12 +115,21 @@ where
     fn serve_on(&self, addr: SocketAddr) -> JoinHandle<io::Result<()>> {
         let acceptor = self.acceptor.clone();
         let service = self.service.clone();
+        let handle = self.handle.clone();
 
         tokio::spawn(async move {
             let listener = TcpListener::bind(addr).await?;
+            handle.listening.notify_waiters();
 
-            loop {
-                let (stream, addr) = listener.accept().await?;
+            let mut connections = Vec::new();
+            let mode;
+
+            mode = loop {
+                let (stream, addr) = tokio::select! {
+                    result = listener.accept() => result?,
+                    _ = handle.shutdown.notified() => break Mode::Shutdown,
+                    _ = handle.graceful_shutdown.notified() => break Mode::Graceful,
+                };
 
                 let sent = Arc::new(AtomicUsize::new(0));
                 let received = Arc::new(AtomicUsize::new(0));
@@ -124,7 +139,7 @@ where
                 let svc = AddExtension::new(service.clone(), addr);
                 let svc = AddExtension::new(svc, Recording { sent, received });
 
-                tokio::spawn(async move {
+                let conn = tokio::spawn(async move {
                     if let Ok(stream) = acceptor.accept(stream).await {
                         let _ = Http::new()
                             .serve_connection(stream, svc)
@@ -132,7 +147,19 @@ where
                             .await;
                     }
                 });
+
+                connections.push(conn);
+            };
+
+            match mode {
+                Mode::Shutdown => shutdown_conns(connections),
+                Mode::Graceful => tokio::select! {
+                    _ = handle.shutdown.notified() => shutdown_conns(connections),
+                    _ = wait_conns(&mut connections) => (),
+                },
             }
+
+            Ok(())
         })
     }
 }
