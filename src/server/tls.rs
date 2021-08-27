@@ -191,7 +191,10 @@ impl TlsLoader {
     async fn get_acceptor(&mut self) -> io::Result<Arc<RwLock<CoreTlsAcceptor>>> {
         match &self.acceptor {
             Some(acceptor) => Ok(acceptor.clone()),
-            None => Err(invalid_input("`TlsLoader` is not loaded.")),
+            None => {
+                self.load().await?;
+                Ok(self.acceptor.as_ref().unwrap().clone())
+            },
         }
     }
 
