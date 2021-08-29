@@ -38,34 +38,30 @@
 //! }
 //! ```
 
-use crate::server::serve::{shutdown_conns, wait_conns, Accept, Mode, Serve};
-use crate::server::Handle;
+use crate::server::http_server::NoopAcceptor;
+use crate::server::Accept;
 
 use std::io;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
-
-use http::request::Request;
-use http::response::Response;
-use http_body::Body;
 
 use tower_http::add_extension::AddExtension;
-use tower_service::Service;
-
-use hyper::server::conn::Http;
+use tower_layer::Layer;
 
 /// Type to access data that is being recorded in real-time.
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct Recording {
-    sent: Arc<AtomicUsize>,
-    received: Arc<AtomicUsize>,
+    inner: Arc<RecordingInner>,
+}
+
+#[derive(Default)]
+struct RecordingInner {
+    sent: AtomicUsize,
+    received: AtomicUsize,
 }
 
 impl Recording {
@@ -73,126 +69,64 @@ impl Recording {
     ///
     /// Data might be changed between function calls.
     pub fn bytes_sent(&self) -> usize {
-        self.sent.load(Ordering::Acquire)
+        self.inner.sent.load(Ordering::Acquire)
     }
 
     /// Get recorded incoming bytes.
     ///
     /// Data might be changed between function calls.
     pub fn bytes_received(&self) -> usize {
-        self.received.load(Ordering::Acquire)
+        self.inner.received.load(Ordering::Acquire)
     }
 }
 
-pub(crate) struct RecordingHttpServer<A, S> {
-    acceptor: A,
-    service: S,
-    handle: Handle,
+#[derive(Clone)]
+pub(crate) struct RecordingLayer {
+    recording: Recording,
 }
 
-impl<A, S> RecordingHttpServer<A, S> {
-    pub fn new(acceptor: A, service: S, handle: Handle) -> Self {
-        Self {
-            acceptor,
-            service,
-            handle,
-        }
+impl RecordingLayer {
+    pub fn new(recording: Recording) -> Self {
+        Self { recording }
     }
 }
 
-impl<A, S, B> Serve for RecordingHttpServer<A, S>
-where
-    A: Accept<RecordingStream<TcpStream>> + Send + Sync + 'static,
-    A::Stream: Send + 'static,
-    A::Future: Send + 'static,
-    S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Clone + 'static,
-    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    S::Future: Send,
-    B: Body + Send + 'static,
-    B::Data: Send,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
-    fn serve_on(&self, addr: SocketAddr) -> JoinHandle<io::Result<()>> {
-        let acceptor = self.acceptor.clone();
-        let service = self.service.clone();
-        let handle = self.handle.clone();
+impl<S> Layer<S> for RecordingLayer {
+    type Service = AddExtension<S, Recording>;
 
-        tokio::spawn(async move {
-            let listener = TcpListener::bind(addr).await?;
-            handle.listening.notify_waiters();
-
-            let mut connections = Vec::new();
-            let mode;
-
-            mode = loop {
-                let (stream, addr) = tokio::select! {
-                    result = listener.accept() => result?,
-                    _ = handle.shutdown.notified() => break Mode::Shutdown,
-                    _ = handle.graceful_shutdown.notified() => break Mode::Graceful,
-                };
-
-                let sent = Arc::new(AtomicUsize::new(0));
-                let received = Arc::new(AtomicUsize::new(0));
-                let acceptor =
-                    RecordingAcceptor::new(acceptor.clone(), sent.clone(), received.clone());
-
-                let svc = AddExtension::new(service.clone(), addr);
-                let svc = AddExtension::new(svc, Recording { sent, received });
-
-                let conn = tokio::spawn(async move {
-                    if let Ok(stream) = acceptor.accept(stream).await {
-                        let _ = Http::new()
-                            .serve_connection(stream, svc)
-                            .with_upgrades()
-                            .await;
-                    }
-                });
-
-                connections.push(conn);
-            };
-
-            match mode {
-                Mode::Shutdown => shutdown_conns(connections),
-                Mode::Graceful => tokio::select! {
-                    _ = handle.shutdown.notified() => shutdown_conns(connections),
-                    _ = wait_conns(&mut connections) => (),
-                },
-            }
-
-            Ok(())
-        })
+    fn layer(&self, service: S) -> Self::Service {
+        AddExtension::new(service, self.recording.clone())
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct RecordingAcceptor<A> {
     inner: A,
-    sent: Arc<AtomicUsize>,
-    received: Arc<AtomicUsize>,
+    recording: Recording,
 }
 
 impl<A> RecordingAcceptor<A> {
-    fn new(inner: A, sent: Arc<AtomicUsize>, received: Arc<AtomicUsize>) -> Self {
-        Self {
-            inner,
-            sent,
-            received,
-        }
+    pub fn new(inner: A, recording: Recording) -> Self {
+        Self { inner, recording }
+    }
+}
+
+impl RecordingAcceptor<NoopAcceptor> {
+    pub fn from_recording(recording: Recording) -> Self {
+        RecordingAcceptor::new(NoopAcceptor, recording)
     }
 }
 
 impl<I, A> Accept<I> for RecordingAcceptor<A>
 where
-    I: AsyncRead + AsyncWrite + Unpin,
-    A: Accept<RecordingStream<I>> + Send + Sync + 'static,
-    A::Stream: Send + 'static,
-    A::Future: Send + 'static,
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    A: Accept<RecordingStream<I>>,
 {
-    type Stream = A::Stream;
+    type Conn = A::Conn;
     type Future = A::Future;
 
     fn accept(&self, stream: I) -> Self::Future {
-        let rec_stream = RecordingStream::new(stream, self.sent.clone(), self.received.clone());
+        let rec_stream = RecordingStream::new(stream, self.recording.clone());
 
         self.inner.accept(rec_stream)
     }
@@ -200,17 +134,12 @@ where
 
 pub(crate) struct RecordingStream<I> {
     inner: I,
-    sent: Arc<AtomicUsize>,
-    received: Arc<AtomicUsize>,
+    recording: Recording,
 }
 
 impl<I> RecordingStream<I> {
-    pub fn new(inner: I, sent: Arc<AtomicUsize>, received: Arc<AtomicUsize>) -> Self {
-        Self {
-            inner,
-            sent,
-            received,
-        }
+    pub fn new(inner: I, recording: Recording) -> Self {
+        Self { inner, recording }
     }
 }
 
@@ -225,7 +154,9 @@ where
     ) -> Poll<io::Result<()>> {
         let result = Pin::new(&mut self.inner).poll_read(cx, buf);
 
-        self.received
+        self.recording
+            .inner
+            .received
             .fetch_add(buf.filled().len(), Ordering::Release);
 
         result
@@ -241,7 +172,10 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.sent.fetch_add(buf.len(), Ordering::Release);
+        self.recording
+            .inner
+            .sent
+            .fetch_add(buf.len(), Ordering::Release);
 
         Pin::new(&mut self.inner).poll_write(cx, buf)
     }
@@ -252,5 +186,90 @@ where
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Recording;
+
+    use crate::server::tests::{empty_request, http_client, into_text};
+    use crate::{Handle, Server};
+
+    use axum::{extract::Extension, handler::get};
+    use tower_service::Service;
+    use tower_util::ServiceExt;
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_record() {
+        let app = get(handler);
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind("127.0.0.1:0")
+            .bind("127.0.0.1:0")
+            .handle(handle.clone())
+            .serve_and_record(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        for addr in addrs {
+            let mut client = http_client(addr).await.unwrap();
+
+            let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+            let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+            assert_ne!(into_text(resp).await, "0");
+        }
+    }
+
+    #[cfg(feature = "tls-rustls")]
+    use crate::server::tls::tests::{https_client, CERTIFICATE, PRIVATE_KEY};
+
+    #[ignore]
+    #[tokio::test]
+    #[cfg(feature = "tls-rustls")]
+    async fn test_tls_record() {
+        let key = PRIVATE_KEY.as_bytes().to_vec();
+        let cert = CERTIFICATE.as_bytes().to_vec();
+
+        let app = get(handler);
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind_rustls("127.0.0.1:0")
+            .bind_rustls("127.0.0.1:0")
+            .private_key(key)
+            .certificate(cert)
+            .handle(handle.clone())
+            .serve_and_record(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        for addr in addrs {
+            let mut client = https_client(addr).await.unwrap();
+
+            let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+            let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+            assert_ne!(into_text(resp).await, "0");
+        }
+    }
+
+    async fn handler(Extension(rec): Extension<Recording>) -> String {
+        format!("{}", rec.bytes_received())
     }
 }

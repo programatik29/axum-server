@@ -1,5 +1,3 @@
-mod serve;
-
 #[cfg(feature = "tls-rustls")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub mod tls;
@@ -8,105 +6,56 @@ pub mod tls;
 #[cfg_attr(docsrs, doc(cfg(feature = "record")))]
 pub mod record;
 
-use serve::{Accept, HttpServer, Serve};
+mod http_server;
 
 #[cfg(feature = "tls-rustls")]
-use tls::{TlsLoader, TlsServer};
+use {
+    rustls::ServerConfig,
+    std::path::Path,
+    tls::{TlsLoader, TlsServer},
+};
 
 #[cfg(feature = "record")]
-use record::RecordingHttpServer;
+use record::{Recording, RecordingAcceptor, RecordingLayer};
 
-#[cfg(feature = "tls-rustls")]
-use std::path::Path;
+use http_server::HttpServer;
 
-#[cfg(feature = "tls-rustls")]
-use rustls::ServerConfig;
+use crate::util::HyperService;
 
+use std::future::Future;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
-use futures_util::future::Ready;
+use parking_lot::RwLock;
+
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::task::{spawn_blocking, JoinHandle};
 
+use tower_http::add_extension::AddExtension;
+use tower_layer::Layer;
 use tower_service::Service;
 
 use http::request::Request;
 use http::response::Response;
 use http_body::Body;
 
+type ListenerTask = JoinHandle<io::Result<()>>;
+type FutList = FuturesUnordered<ListenerTask>;
+
 pub(crate) type BoxedToSocketAddrs =
     Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
 
-/// A struct that can be passed to a server for additional utilites.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use axum::{
-///     handler::get,
-///     Router,
-/// };
-/// use axum_server::Handle;
-/// use tokio::time::{sleep, Duration};
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let app = Router::new().route("/", get(|| async { "Hello, World!" }));
-///
-///     let handle = Handle::new();
-///
-///     tokio::spawn(shutdown_in_twenty_secs(handle.clone()));
-///
-///     axum_server::bind("127.0.0.1:3000")
-///         .handle(handle)
-///         .serve(app)
-///         .await
-///         .unwrap();
-/// }
-///
-/// async fn shutdown_in_twenty_secs(handle: Handle) {
-///     sleep(Duration::from_secs(20)).await;
-///
-///     handle.shutdown();
-/// }
-/// ```
-#[derive(Default, Clone)]
-pub struct Handle {
-    listening: Arc<Notify>,
-    shutdown: Arc<Notify>,
-    graceful_shutdown: Arc<Notify>,
-}
+pub(crate) trait Accept<I = TcpStream>: Clone + Send + Sync + 'static {
+    type Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+    type Future: Future<Output = io::Result<Self::Conn>> + Send;
 
-impl Handle {
-    /// Create a `Handle`.
-    pub fn new() -> Self {
-        Handle::default()
-    }
-
-    /// Wait until server starts listening.
-    pub async fn listening(&self) {
-        self.listening.notified().await;
-    }
-
-    /// Signal server to shut down.
-    ///
-    /// [`serve`](Server::serve) function will return when shutdown is complete.
-    pub fn shutdown(&self) {
-        self.shutdown.notify_waiters();
-    }
-
-    /// Signal server to gracefully shut down.
-    ///
-    /// [`serve`](Server::serve) function will return when graceful shutdown is complete.
-    pub fn graceful_shutdown(&self) {
-        self.graceful_shutdown.notify_waiters();
-    }
+    fn accept(&self, conn: I) -> Self::Future;
 }
 
 /// Configurable HTTP server, supporting HTTP/1.1 and HTTP2.
@@ -226,10 +175,8 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| {
-            HttpServer::new(NoopAcceptor::new(), service.clone(), handle)
-        })
-        .await
+        self.custom_serve(move |handle| HttpServer::from_service(service.clone(), handle))
+            .await
     }
 
     /// Serve provided cloneable service on all binded addresses.
@@ -253,41 +200,43 @@ impl Server {
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         self.custom_serve(move |handle| {
-            RecordingHttpServer::new(NoopAcceptor::new(), service.clone(), handle)
+            let recording = Recording::default();
+            let acceptor = RecordingAcceptor::from_recording(recording.clone());
+            let layer = RecordingLayer::new(recording);
+
+            HttpServer::new(service.clone(), handle, layer, acceptor)
         })
         .await
     }
 
-    async fn custom_serve<F, A>(self, make_server: F) -> io::Result<()>
+    async fn custom_serve<F, L, S, A>(self, make_server: F) -> io::Result<()>
     where
-        F: Fn(Handle) -> A,
-        A: Serve + Send + Sync + 'static,
+        F: Fn(Handle) -> HttpServer<L, S, A>,
+        L: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
+        L::Service: HyperService<Request<hyper::Body>>,
+        S: HyperService<Request<hyper::Body>>,
+        A: Accept,
     {
+        serve(move |mut fut_list| async move {
+            self.check_addrs()?;
+
+            if !self.addrs.is_empty() {
+                serve_addrs(&mut fut_list, self.handle.clone(), make_server, self.addrs).await?;
+            }
+
+            self.handle.notify_listening();
+
+            Ok(fut_list)
+        })
+        .await
+    }
+
+    fn check_addrs(&self) -> io::Result<()> {
         if self.addrs.is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 "no address provided to bind",
             ));
-        }
-
-        let mut fut_list = FuturesUnordered::new();
-
-        if !self.addrs.is_empty() {
-            let http_server = make_server(self.handle);
-
-            let addrs = collect_addrs(self.addrs).await.unwrap()?;
-
-            for addr in addrs {
-                fut_list.push(http_server.serve_on(addr));
-            }
-        }
-
-        while let Some(handle) = fut_list.next().await {
-            if let Err(e) = handle.unwrap() {
-                fut_list.iter().for_each(|handle| handle.abort());
-
-                return Err(e);
-            }
         }
 
         Ok(())
@@ -312,25 +261,154 @@ where
     Server::new().bind_rustls(addr)
 }
 
-#[derive(Clone)]
-pub(crate) struct NoopAcceptor;
+/// A struct that can be passed to a server for additional utilites.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use axum::{
+///     handler::get,
+///     Router,
+/// };
+/// use axum_server::Handle;
+/// use tokio::time::{sleep, Duration};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let app = Router::new().route("/", get(|| async { "Hello, World!" }));
+///
+///     let handle = Handle::new();
+///
+///     tokio::spawn(shutdown_in_twenty_secs(handle.clone()));
+///
+///     axum_server::bind("127.0.0.1:3000")
+///         .handle(handle)
+///         .serve(app)
+///         .await
+///         .unwrap();
+/// }
+///
+/// async fn shutdown_in_twenty_secs(handle: Handle) {
+///     sleep(Duration::from_secs(20)).await;
+///
+///     handle.shutdown();
+/// }
+/// ```
+#[derive(Default, Clone)]
+pub struct Handle {
+    inner: Arc<HandleInner>,
+}
 
-impl NoopAcceptor {
-    fn new() -> Self {
-        Self
+#[derive(Default)]
+struct HandleInner {
+    listening: Notify,
+    listening_addrs: RwLock<Option<Vec<SocketAddr>>>,
+    shutdown: Notify,
+    graceful_shutdown: Notify,
+}
+
+impl Handle {
+    /// Create a `Handle`.
+    pub fn new() -> Self {
+        Handle::default()
+    }
+
+    /// Signal server to shut down.
+    ///
+    /// [`serve`](Server::serve) function will return when shutdown is complete.
+    pub fn shutdown(&self) {
+        self.inner.shutdown.notify_waiters();
+    }
+
+    async fn shutdown_signal(&self) {
+        self.inner.shutdown.notified().await;
+    }
+
+    /// Signal server to gracefully shut down.
+    ///
+    /// [`serve`](Server::serve) function will return when graceful shutdown is complete.
+    pub fn graceful_shutdown(&self) {
+        self.inner.graceful_shutdown.notify_waiters();
+    }
+
+    async fn graceful_shutdown_signal(&self) {
+        self.inner.graceful_shutdown.notified().await;
+    }
+
+    /// Get addresses that are being listened.
+    ///
+    /// Ordered by first `bind` call to last `bind` call.
+    /// Then ordered by first `bind_rustls` call to last `bind_rustls` call.
+    ///
+    /// Always `Some` after [`listening`](Handle::listening) returns.
+    pub fn listening_addrs(&self) -> Option<Vec<SocketAddr>> {
+        self.inner.listening_addrs.read().clone()
+    }
+
+    /// Wait until server starts listening on all addresses.
+    pub async fn listening(&self) {
+        self.inner.listening.notified().await;
+    }
+
+    fn notify_listening(&self) {
+        self.inner.listening.notify_waiters();
+    }
+
+    fn add_listening_addr(&self, addr: SocketAddr) {
+        let mut lock = self.inner.listening_addrs.write();
+
+        match lock.as_mut() {
+            Some(vec) => vec.push(addr),
+            None => *lock = Some(vec![addr]),
+        }
     }
 }
 
-impl<I> Accept<I> for NoopAcceptor
+async fn serve<F, Fut>(fut: F) -> io::Result<()>
 where
-    I: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce(FutList) -> Fut,
+    Fut: Future<Output = io::Result<FutList>>,
 {
-    type Stream = I;
-    type Future = Ready<io::Result<Self::Stream>>;
+    let mut fut_list = FuturesUnordered::new();
 
-    fn accept(&self, stream: I) -> Self::Future {
-        futures_util::future::ready(Ok(stream))
+    fut_list = fut(fut_list).await?;
+
+    while let Some(handle) = fut_list.next().await {
+        if let Err(e) = handle.unwrap() {
+            fut_list.iter().for_each(|handle| handle.abort());
+
+            return Err(e);
+        }
     }
+
+    Ok(())
+}
+
+async fn serve_addrs<F, L, S, A>(
+    fut_list: &mut FutList,
+    handle: Handle,
+    make_server: F,
+    addrs: Vec<BoxedToSocketAddrs>,
+) -> io::Result<()>
+where
+    F: Fn(Handle) -> HttpServer<L, S, A>,
+    L: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
+    L::Service: HyperService<Request<hyper::Body>>,
+    S: HyperService<Request<hyper::Body>>,
+    A: Accept,
+{
+    let http_server = make_server(handle.clone());
+
+    let addrs = collect_addrs(addrs).await.unwrap()?;
+
+    for addr in addrs {
+        let listener = TcpListener::bind(addr).await?;
+        handle.add_listening_addr(listener.local_addr()?);
+
+        fut_list.push(http_server.serve_on(listener));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn collect_addrs(
@@ -352,8 +430,19 @@ pub(crate) fn collect_addrs(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests {
+    use super::{bind, collect_addrs, Handle, Server};
+
+    use axum::handler::get;
+    use http::{Request, Response};
+    use hyper::client::conn::{handshake, SendRequest};
+    use hyper::Body;
+    use std::io;
+    use std::net::SocketAddr;
+    use tokio::net::TcpStream;
+    use tokio::task::JoinHandle;
+    use tower_service::Service;
+    use tower_util::ServiceExt;
 
     #[tokio::test]
     async fn test_bind_addresses() {
@@ -366,5 +455,184 @@ mod tests {
 
     fn addr(s: &'static str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_listening_addrs() {
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind("127.0.0.1:0")
+            .bind("127.0.0.1:0")
+            .handle(handle.clone())
+            .serve(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+        assert!(handle.listening_addrs().is_some());
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_with_requests() {
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind("127.0.0.1:0")
+            .bind("127.0.0.1:0")
+            .handle(handle.clone())
+            .serve(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        for addr in addrs {
+            let mut client = http_client(addr).await.unwrap();
+
+            let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+            let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+            assert_eq!(into_text(resp).await, "Hello, world!");
+        }
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_shutdown() {
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind("127.0.0.1:0")
+            .bind("127.0.0.1:0")
+            .handle(handle.clone())
+            .serve(app);
+
+        let server_task = tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        let addr = addrs[0];
+        let mut client = http_client(addr).await.unwrap();
+
+        let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+        let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+        assert_eq!(into_text(resp).await, "Hello, world!");
+
+        handle.shutdown();
+
+        let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+        let resp = client.ready_and().await.unwrap().call(req).await;
+
+        assert!(resp.is_err());
+
+        assert!(server_task.await.unwrap().is_ok());
+
+        for addr in addrs {
+            assert!(http_client(addr).await.is_err());
+        }
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_graceful_shutdown() {
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind("127.0.0.1:0")
+            .bind("127.0.0.1:0")
+            .handle(handle.clone())
+            .serve(app);
+
+        let server_task = tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        let addr = addrs[0];
+        let (mut client, conn_handle) = http_client_with_handle(addr).await.unwrap();
+
+        let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+        let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+        assert_eq!(into_text(resp).await, "Hello, world!");
+
+        handle.graceful_shutdown();
+
+        let req = empty_request(&format!("http://127.0.0.1:{}/", addr.port()));
+
+        let resp = client.ready_and().await.unwrap().call(req).await;
+
+        assert!(resp.is_ok());
+
+        for addr in addrs {
+            assert!(http_client(addr).await.is_err());
+        }
+
+        conn_handle.abort();
+
+        assert!(server_task.await.unwrap().is_ok());
+    }
+
+    async fn http_client_with_handle(
+        addr: SocketAddr,
+    ) -> io::Result<(SendRequest<Body>, JoinHandle<()>)> {
+        let stream = TcpStream::connect(format!("127.0.0.1:{}", addr.port())).await?;
+
+        let (client, conn) = handshake(stream)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        let handle = tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        Ok((client, handle))
+    }
+
+    pub(crate) async fn http_client(addr: SocketAddr) -> io::Result<SendRequest<Body>> {
+        let stream = TcpStream::connect(format!("127.0.0.1:{}", addr.port())).await?;
+
+        let (client, conn) = handshake(stream)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        Ok(client)
+    }
+
+    pub(crate) async fn into_text(resp: Response<Body>) -> String {
+        let bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    pub(crate) fn empty_request(uri: &str) -> Request<Body> {
+        let mut req = Request::new(Body::empty());
+
+        *req.uri_mut() = uri.parse().unwrap();
+
+        req
     }
 }

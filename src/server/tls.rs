@@ -28,10 +28,12 @@
 //! ```
 
 #[cfg(feature = "record")]
-use crate::server::record::RecordingHttpServer;
+use crate::server::record::{Recording, RecordingAcceptor, RecordingLayer};
 
-use crate::server::serve::{Accept, HttpServer, Serve};
-use crate::server::{collect_addrs, BoxedToSocketAddrs, Handle, NoopAcceptor, Server};
+use crate::server::http_server::HttpServer;
+use crate::server::{serve, serve_addrs, Accept, BoxedToSocketAddrs, Handle, Server};
+
+use crate::util::HyperService;
 
 use std::{
     fs::File,
@@ -42,8 +44,6 @@ use std::{
 };
 
 use parking_lot::RwLock;
-
-use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::spawn_blocking;
@@ -59,7 +59,240 @@ use http::request::Request;
 use http::response::Response;
 use http_body::Body;
 
+use tower_http::add_extension::AddExtension;
+use tower_layer::Layer;
 use tower_service::Service;
+
+/// Configurable HTTP and HTTPS server, supporting HTTP/1.1 and HTTP2.
+///
+/// See [module](crate::server::tls) page for examples.
+#[derive(Default)]
+pub struct TlsServer {
+    server: Server,
+    tls_addrs: Vec<BoxedToSocketAddrs>,
+    tls_loader: TlsLoader,
+}
+
+impl TlsServer {
+    /// Create a new `TlsServer`.
+    pub fn new() -> Self {
+        TlsServer::default()
+    }
+
+    /// Bind to a single address or multiple addresses.
+    pub fn bind<A>(mut self, addr: A) -> Self
+    where
+        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+    {
+        self.server = self.server.bind(addr);
+        self
+    }
+    /// Provide a `Handle`.
+    ///
+    /// Successive calls will overwrite last `Handle`.
+    pub fn handle(mut self, handle: Handle) -> Self {
+        self.server = self.server.handle(handle);
+        self
+    }
+
+    /// Bind to a single address or multiple addresses. Using tls protocol on streams.
+    ///
+    /// Certificate and private key must be set before or after calling this.
+    pub fn bind_rustls<A>(mut self, addr: A) -> Self
+    where
+        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+    {
+        self.tls_addrs.push(Box::new(addr));
+        self
+    }
+
+    /// Provide a **loaded** [`TlsLoader`](TlsLoader).
+    ///
+    /// This will overwrite any previously set private key and certificate(s) with its own ones.
+    pub fn loader(mut self, loader: TlsLoader) -> Self {
+        self.tls_loader = loader;
+        self
+    }
+
+    /// Provide [`ServerConfig`](ServerConfig) containing private key and certificate(s).
+    ///
+    /// When this value is set, other tls configurations are ignored.
+    ///
+    /// Successive calls will overwrite last value.
+    pub fn tls_config(mut self, config: Arc<ServerConfig>) -> Self {
+        self.tls_loader.config(config);
+        self
+    }
+
+    /// Set private key in PEM format.
+    ///
+    /// Successive calls will overwrite last private key.
+    pub fn private_key(mut self, private_key: Vec<u8>) -> Self {
+        self.tls_loader.private_key(private_key);
+        self
+    }
+
+    /// Set certificate(s) in PEM format.
+    ///
+    /// Successive calls will overwrite last certificate.
+    pub fn certificate(mut self, certificate: Vec<u8>) -> Self {
+        self.tls_loader.certificate(certificate);
+        self
+    }
+
+    /// Set private key from file in PEM format.
+    ///
+    /// Successive calls will overwrite last private key.
+    pub fn private_key_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.tls_loader.private_key_file(path);
+        self
+    }
+
+    /// Set certificate(s) from file in PEM format.
+    ///
+    /// Successive calls will overwrite last certificate.
+    pub fn certificate_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.tls_loader.certificate_file(path);
+        self
+    }
+
+    /// Serve provided cloneable service on all binded addresses.
+    ///
+    /// If accepting connection fails in any one of binded addresses, listening in all
+    /// binded addresses will be stopped and then an error will be returned.
+    pub async fn serve<S, B>(mut self, service: S) -> io::Result<()>
+    where
+        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
+        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Future: Send,
+        B: Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let service2 = service.clone();
+
+        let acceptor = self.tls_loader.get_acceptor().await?;
+
+        self.custom_serve(
+            move |handle| HttpServer::from_service(service.clone(), handle),
+            move |handle| {
+                let acceptor = TlsAcceptor::new(acceptor.clone());
+                HttpServer::from_acceptor(service2.clone(), handle, acceptor)
+            },
+        )
+        .await
+    }
+
+    /// Serve provided cloneable service on all binded addresses.
+    ///
+    /// Record sent and received bytes for each connection. Sent and received bytes
+    /// through a connection can be accessed through [`Request`](Request) extensions.
+    ///
+    /// See [`axum_server::record`](crate::server::record) module for examples.
+    ///
+    /// If accepting connection fails in any one of binded addresses, listening in all
+    /// binded addresses will be stopped and then an error will be returned.
+    #[cfg(feature = "record")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "record")))]
+    pub async fn serve_and_record<S, B>(mut self, service: S) -> io::Result<()>
+    where
+        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
+        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Future: Send,
+        B: Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let service2 = service.clone();
+
+        let acceptor = self.tls_loader.get_acceptor().await?;
+
+        self.custom_serve(
+            move |handle| {
+                let recording = Recording::default();
+                let acceptor = RecordingAcceptor::from_recording(recording.clone());
+                let layer = RecordingLayer::new(recording);
+
+                HttpServer::new(service.clone(), handle, layer, acceptor)
+            },
+            move |handle| {
+                let recording = Recording::default();
+                let acceptor = TlsAcceptor::new(acceptor.clone());
+                let acceptor = RecordingAcceptor::new(acceptor, recording.clone());
+                let layer = RecordingLayer::new(recording);
+
+                HttpServer::new(service2.clone(), handle, layer, acceptor)
+            },
+        )
+        .await
+    }
+
+    async fn custom_serve<F1, L1, S1, A1, F2, L2, S2, A2>(
+        self,
+        make_server: F1,
+        make_tls_server: F2,
+    ) -> io::Result<()>
+    where
+        F1: Fn(Handle) -> HttpServer<L1, S1, A1>,
+        L1: Layer<AddExtension<S1, SocketAddr>> + Clone + Send + Sync + 'static,
+        L1::Service: HyperService<Request<hyper::Body>>,
+        S1: HyperService<Request<hyper::Body>>,
+        A1: Accept,
+        F2: Fn(Handle) -> HttpServer<L2, S2, A2>,
+        L2: Layer<AddExtension<S2, SocketAddr>> + Clone + Send + Sync + 'static,
+        L2::Service: HyperService<Request<hyper::Body>>,
+        S2: HyperService<Request<hyper::Body>>,
+        A2: Accept,
+    {
+        serve(move |mut fut_list| async move {
+            self.check_addrs()?;
+
+            if !self.server.addrs.is_empty() {
+                serve_addrs(
+                    &mut fut_list,
+                    self.server.handle.clone(),
+                    make_server,
+                    self.server.addrs,
+                )
+                .await?;
+            }
+
+            if !self.tls_addrs.is_empty() {
+                serve_addrs(
+                    &mut fut_list,
+                    self.server.handle.clone(),
+                    make_tls_server,
+                    self.tls_addrs,
+                )
+                .await?;
+            }
+
+            self.server.handle.notify_listening();
+
+            Ok(fut_list)
+        })
+        .await
+    }
+
+    fn check_addrs(&self) -> io::Result<()> {
+        if self.server.addrs.is_empty() && self.tls_addrs.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "no address provided to bind or bind_rustls",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+impl From<Server> for TlsServer {
+    fn from(server: Server) -> Self {
+        let mut tls_server = TlsServer::default();
+        tls_server.server = server;
+        tls_server
+    }
+}
 
 /// A struct that can be passed to `TlsServer` to reload tls configuration.
 ///
@@ -194,7 +427,7 @@ impl TlsLoader {
             None => {
                 self.load().await?;
                 Ok(self.acceptor.as_ref().unwrap().clone())
-            },
+            }
         }
     }
 
@@ -220,215 +453,6 @@ impl TlsLoader {
         };
 
         Ok(rustls_config(key, certs)?)
-    }
-}
-
-/// Configurable HTTP and HTTPS server, supporting HTTP/1.1 and HTTP2.
-///
-/// See [module](crate::server::tls) page for examples.
-#[derive(Default)]
-pub struct TlsServer {
-    server: Server,
-    tls_addrs: Vec<BoxedToSocketAddrs>,
-    tls_loader: TlsLoader,
-}
-
-impl TlsServer {
-    /// Create a new `TlsServer`.
-    pub fn new() -> Self {
-        TlsServer::default()
-    }
-
-    /// Bind to a single address or multiple addresses.
-    pub fn bind<A>(mut self, addr: A) -> Self
-    where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
-    {
-        self.server = self.server.bind(addr);
-        self
-    }
-    /// Provide a `Handle`.
-    ///
-    /// Successive calls will overwrite last `Handle`.
-    pub fn handle(mut self, handle: Handle) -> Self {
-        self.server = self.server.handle(handle);
-        self
-    }
-
-    /// Bind to a single address or multiple addresses. Using tls protocol on streams.
-    ///
-    /// Certificate and private key must be set before or after calling this.
-    pub fn bind_rustls<A>(mut self, addr: A) -> Self
-    where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
-    {
-        self.tls_addrs.push(Box::new(addr));
-        self
-    }
-
-    /// Provide a **loaded** [`TlsLoader`](TlsLoader).
-    ///
-    /// This will overwrite any previously set private key and certificate(s) with its own ones.
-    pub fn loader(mut self, loader: TlsLoader) -> Self {
-        self.tls_loader = loader;
-        self
-    }
-
-    /// Provide [`ServerConfig`](ServerConfig) containing private key and certificate(s).
-    ///
-    /// When this value is set, other tls configurations are ignored.
-    ///
-    /// Successive calls will overwrite last value.
-    pub fn tls_config(mut self, config: Arc<ServerConfig>) -> Self {
-        self.tls_loader.config(config);
-        self
-    }
-
-    /// Set private key in PEM format.
-    ///
-    /// Successive calls will overwrite last private key.
-    pub fn private_key(mut self, private_key: Vec<u8>) -> Self {
-        self.tls_loader.private_key(private_key);
-        self
-    }
-
-    /// Set certificate(s) in PEM format.
-    ///
-    /// Successive calls will overwrite last certificate.
-    pub fn certificate(mut self, certificate: Vec<u8>) -> Self {
-        self.tls_loader.certificate(certificate);
-        self
-    }
-
-    /// Set private key from file in PEM format.
-    ///
-    /// Successive calls will overwrite last private key.
-    pub fn private_key_file(mut self, path: impl AsRef<Path>) -> Self {
-        self.tls_loader.private_key_file(path);
-        self
-    }
-
-    /// Set certificate(s) from file in PEM format.
-    ///
-    /// Successive calls will overwrite last certificate.
-    pub fn certificate_file(mut self, path: impl AsRef<Path>) -> Self {
-        self.tls_loader.certificate_file(path);
-        self
-    }
-
-    /// Serve provided cloneable service on all binded addresses.
-    ///
-    /// If accepting connection fails in any one of binded addresses, listening in all
-    /// binded addresses will be stopped and then an error will be returned.
-    pub async fn serve<S, B>(self, service: S) -> io::Result<()>
-    where
-        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-        S::Future: Send,
-        B: Body + Send + 'static,
-        B::Data: Send,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        let service2 = service.clone();
-
-        self.custom_serve(
-            move |handle| HttpServer::new(NoopAcceptor::new(), service.clone(), handle),
-            move |handle, acceptor| {
-                HttpServer::new(TlsAcceptor::new(acceptor), service2.clone(), handle)
-            },
-        )
-        .await
-    }
-
-    /// Serve provided cloneable service on all binded addresses.
-    ///
-    /// Record sent and received bytes for each connection. Sent and received bytes
-    /// through a connection can be accessed through [`Request`](Request) extensions.
-    ///
-    /// See [`axum_server::record`](crate::server::record) module for examples.
-    ///
-    /// If accepting connection fails in any one of binded addresses, listening in all
-    /// binded addresses will be stopped and then an error will be returned.
-    #[cfg(feature = "record")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "record")))]
-    pub async fn serve_and_record<S, B>(self, service: S) -> io::Result<()>
-    where
-        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-        S::Future: Send,
-        B: Body + Send + 'static,
-        B::Data: Send,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
-        let service2 = service.clone();
-
-        self.custom_serve(
-            move |handle| RecordingHttpServer::new(NoopAcceptor::new(), service.clone(), handle),
-            move |handle, acceptor| {
-                RecordingHttpServer::new(TlsAcceptor::new(acceptor), service2.clone(), handle)
-            },
-        )
-        .await
-    }
-
-    async fn custom_serve<F1, A1, F2, A2>(
-        mut self,
-        make_server: F1,
-        make_tls_server: F2,
-    ) -> io::Result<()>
-    where
-        F1: Fn(Handle) -> A1,
-        A1: Serve + Send + Sync + 'static,
-        F2: Fn(Handle, Arc<RwLock<CoreTlsAcceptor>>) -> A2,
-        A2: Serve + Send + Sync + 'static,
-    {
-        if self.server.addrs.is_empty() && self.tls_addrs.is_empty() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "no address provided to bind",
-            ));
-        }
-
-        let mut fut_list = FuturesUnordered::new();
-
-        if !self.server.addrs.is_empty() {
-            let http_server = make_server(self.server.handle.clone());
-
-            let addrs = collect_addrs(self.server.addrs).await.unwrap()?;
-
-            for addr in addrs {
-                fut_list.push(http_server.serve_on(addr));
-            }
-        }
-
-        if !self.tls_addrs.is_empty() {
-            let acceptor = self.tls_loader.get_acceptor().await?;
-            let http_server = make_tls_server(self.server.handle, acceptor);
-
-            let addrs = collect_addrs(self.tls_addrs).await.unwrap()?;
-
-            for addr in addrs {
-                fut_list.push(http_server.serve_on(addr));
-            }
-        }
-
-        while let Some(handle) = fut_list.next().await {
-            if let Err(e) = handle.unwrap() {
-                fut_list.iter().for_each(|handle| handle.abort());
-
-                return Err(e);
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl From<Server> for TlsServer {
-    fn from(server: Server) -> Self {
-        let mut tls_server = TlsServer::default();
-        tls_server.server = server;
-        tls_server
     }
 }
 
@@ -535,9 +559,9 @@ impl TlsAcceptor {
 
 impl<I> Accept<I> for TlsAcceptor
 where
-    I: AsyncRead + AsyncWrite + Unpin,
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    type Stream = TlsStream<I>;
+    type Conn = TlsStream<I>;
     type Future = AcceptFuture<I>;
 
     fn accept(&self, stream: I) -> Self::Future {
@@ -546,12 +570,9 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::server::bind_rustls;
-
+pub(crate) mod tests {
     // Self Signed Certificate
-    const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
+    pub(crate) const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
 MIIDkzCCAnugAwIBAgIUaVoRuh53PqMETXoouyFrcDmZeSkwDQYJKoZIhvcNAQEL
 BQAwWTELMAkGA1UEBhMCVVMxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
 GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDESMBAGA1UEAwwJbG9jYWxob3N0MB4X
@@ -575,7 +596,7 @@ Fll6LboxLg==
 -----END CERTIFICATE-----"#;
 
     // Self Signed Private Key
-    const PRIVATE_KEY: &'static str = r#"-----BEGIN PRIVATE KEY-----
+    pub(crate) const PRIVATE_KEY: &'static str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQChQbpfW8G7AKhV
 4T5KVE+8mdss93AGXO6KkT2xAhWQD5cmLnqoo5T9XTnhtS8nfYkPowzYsf+OqOD4
 MT/u3aF3TDKVGYkrxjc9xkji6WA1IuDYxO7oS8bdN+MBbuEVXXxfAYl8PA3jr9c3
@@ -604,6 +625,42 @@ ZOwXFVl9mCxXHeYG/tnW4TStiro0hP3lwGUKPaFcR3vHbXLoDrmLycMLP13eOCSt
 SfyHiEc0jh9LdjUlMvCXaB8=
 -----END PRIVATE KEY-----"#;
 
+    use super::{cert_from_value, pkey_from_value, rustls_config, Handle};
+
+    use crate::server::{
+        bind_rustls, collect_addrs,
+        tests::{empty_request, into_text},
+        Server,
+    };
+
+    use axum::handler::get;
+    use hyper::client::conn::{handshake, SendRequest};
+    use hyper::Body;
+    use rustls::ClientConfig;
+    use rustls::{Certificate, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError};
+    use std::io;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::net::TcpStream;
+    use tokio_rustls::TlsConnector;
+    use tower_service::Service;
+    use tower_util::ServiceExt;
+    use webpki::DNSNameRef;
+
+    struct TestCertVerifier;
+
+    impl ServerCertVerifier for TestCertVerifier {
+        fn verify_server_cert(
+            &self,
+            _: &RootCertStore,
+            _: &[Certificate],
+            _: DNSNameRef<'_>,
+            _: &[u8],
+        ) -> Result<ServerCertVerified, TLSError> {
+            Ok(ServerCertVerified::assertion())
+        }
+    }
+
     #[tokio::test]
     async fn test_bind_addresses() {
         let server = bind_rustls("127.0.0.1:3443").bind_rustls("127.0.0.1:3444");
@@ -631,5 +688,90 @@ SfyHiEc0jh9LdjUlMvCXaB8=
 
     fn addr(s: &'static str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_listening_addrs() {
+        let key = PRIVATE_KEY.as_bytes().to_vec();
+        let cert = CERTIFICATE.as_bytes().to_vec();
+
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind_rustls("127.0.0.1:0")
+            .bind_rustls("127.0.0.1:0")
+            .private_key(key)
+            .certificate(cert)
+            .handle(handle.clone())
+            .serve(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+        assert!(handle.listening_addrs().is_some());
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_with_requests() {
+        let key = PRIVATE_KEY.as_bytes().to_vec();
+        let cert = CERTIFICATE.as_bytes().to_vec();
+
+        let app = get(|| async { "Hello, world!" });
+
+        let handle = Handle::new();
+        let server = Server::new()
+            .bind_rustls("127.0.0.1:0")
+            .bind_rustls("127.0.0.1:0")
+            .private_key(key)
+            .certificate(cert)
+            .handle(handle.clone())
+            .serve(app);
+
+        tokio::spawn(server);
+
+        handle.listening().await;
+
+        let addrs = handle.listening_addrs().unwrap();
+        println!("listening addrs: {:?}", addrs);
+
+        for addr in addrs {
+            let mut client = https_client(addr).await.unwrap();
+
+            let req = empty_request(&format!("https://localhost:{}/", addr.port()));
+
+            let resp = client.ready_and().await.unwrap().call(req).await.unwrap();
+
+            assert_eq!(into_text(resp).await, "Hello, world!");
+        }
+    }
+
+    pub(crate) async fn https_client(addr: SocketAddr) -> io::Result<SendRequest<Body>> {
+        let mut config = ClientConfig::new();
+
+        config.root_store = rustls_native_certs::load_native_certs().unwrap();
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(TestCertVerifier));
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+        let config = Arc::new(config);
+        let connector = TlsConnector::from(config);
+
+        let stream = TcpStream::connect(addr).await?;
+        let dns = DNSNameRef::try_from_ascii_str("localhost").unwrap();
+        let stream = connector.connect(dns, stream).await?;
+
+        let (client, conn) = handshake(stream)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        Ok(client)
     }
 }

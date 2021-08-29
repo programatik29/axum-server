@@ -13,25 +13,31 @@ version = "0.1.2"
 
 [features]
 record = []
-tls-rustls = ["parking_lot", "rustls", "tokio-rustls"]
+tls-rustls = ["rustls", "tokio-rustls"]
 
 [dependencies]
 futures-util = "0.3"
 http = "0.2"
 http-body = "0.4"
 hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
+parking_lot = "0.11"
 tokio = { version = "1", features = ["rt", "net", "sync"] }
-tower-service = "0.3.1"
+tower-layer = "0.3"
+tower-service = "0.3"
 tower-http = { version = "0.1", features = ["add-extension"] }
 
 # optional dependencies
-parking_lot = { optional = true, version = "0.11" }
 rustls = { optional = true, version = "0.19" }
 tokio-rustls = { optional = true, version = "0.22" }
 
 [dev-dependencies]
 axum = "0.2"
+hyper = { version = "0.14", features = ["client"] }
+rustls = { version = "0.19", features = ["dangerous_configuration"] }
+rustls-native-certs = "0.5"
 tokio = { version = "1", features = ["full"] }
+tower-util = "0.3"
+webpki = "0.21"
 
 [package.metadata.docs.rs]
 all-features = true

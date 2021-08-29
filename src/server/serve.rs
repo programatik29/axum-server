@@ -69,8 +69,16 @@ where
         let handle = self.handle.clone();
 
         tokio::spawn(async move {
-            let listener = TcpListener::bind(addr).await?;
-            handle.listening.notify_waiters();
+            let listener = match TcpListener::bind(addr).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    handle.wake_one_listening();
+                    return Err(e);
+                }
+            };
+
+            handle.add_listening_addr(listener.local_addr()?);
+            handle.wake_one_listening();
 
             let mut connections = Vec::new();
             let mode;
@@ -78,8 +86,8 @@ where
             mode = loop {
                 let (stream, addr) = tokio::select! {
                     result = listener.accept() => result?,
-                    _ = handle.shutdown.notified() => break Mode::Shutdown,
-                    _ = handle.graceful_shutdown.notified() => break Mode::Graceful,
+                    _ = handle.inner.shutdown.notified() => break Mode::Shutdown,
+                    _ = handle.inner.graceful_shutdown.notified() => break Mode::Graceful,
                 };
                 let acceptor = acceptor.clone();
 
@@ -100,7 +108,7 @@ where
             match mode {
                 Mode::Shutdown => shutdown_conns(connections),
                 Mode::Graceful => tokio::select! {
-                    _ = handle.shutdown.notified() => shutdown_conns(connections),
+                    _ = handle.inner.shutdown.notified() => shutdown_conns(connections),
                     _ = wait_conns(&mut connections) => (),
                 },
             }
