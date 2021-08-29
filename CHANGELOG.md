@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 # Unreleased
 
+None.
+
+# 0.2.0 (29. August 2021)
+
 - Added `TlsLoader` to reload tls configuration.
 - Added `Handle` to provide additional utilities for server.
 
