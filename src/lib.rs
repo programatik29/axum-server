@@ -4,6 +4,7 @@
 //!
 //! - Conveniently bind to any number of addresses.
 //! - Tls support through [`rustls`]. Only `pem` format is supported.
+//! - Reload tls while server is running.
 //! - Access to client ip address from services/handlers.
 //! - Record incoming and outgoing bytes for each connection.
 //! - Services created by [`axum`] can directly be served.
