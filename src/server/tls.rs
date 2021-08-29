@@ -35,13 +35,12 @@ use crate::server::{serve, serve_addrs, Accept, BoxedToSocketAddrs, Handle, Serv
 
 use crate::util::HyperService;
 
-use std::{
-    fs::File,
-    io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
-    net::{SocketAddr, ToSocketAddrs},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::fs::File;
+use std::io;
+use std::io::{BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use parking_lot::RwLock;
 
