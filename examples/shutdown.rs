@@ -1,9 +1,6 @@
 // Run with "cargo run --example shutdown"
 
-use axum::{
-    handler::get,
-    Router,
-};
+use axum::{handler::get, Router};
 use axum_server::Handle;
 use tokio::time::{sleep, Duration};
 

@@ -1,9 +1,6 @@
 // Run with "cargo run --all-features --example tls_rustls"
 
-use axum::{
-    handler::get,
-    Router,
-};
+use axum::{handler::get, Router};
 
 use axum_server::Server;
 

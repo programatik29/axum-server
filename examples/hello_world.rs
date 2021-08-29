@@ -1,9 +1,6 @@
 // Run with "cargo run --example hello_world"
 
-use axum::{
-    handler::get,
-    Router,
-};
+use axum::{handler::get, Router};
 
 #[tokio::main]
 async fn main() {

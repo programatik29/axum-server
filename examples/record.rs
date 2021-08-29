@@ -2,11 +2,7 @@
 
 use std::net::SocketAddr;
 
-use axum::{
-    handler::get,
-    extract::Extension,
-    Router,
-};
+use axum::{extract::Extension, handler::get, Router};
 
 use axum_server::record::Recording;
 
