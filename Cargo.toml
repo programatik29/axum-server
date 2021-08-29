@@ -45,3 +45,19 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.playground]
 features = ["tls_rustls", "record"]
+
+[[example]]
+name = "tls_rustls"
+required-features = ["tls-rustls"]
+
+[[example]]
+name = "plain_and_tls"
+required-features = ["tls-rustls"]
+
+[[example]]
+name = "tls_reload"
+required-features = ["tls-rustls"]
+
+[[example]]
+name = "record"
+required-features = ["record"]
