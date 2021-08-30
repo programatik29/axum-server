@@ -27,11 +27,8 @@
 //! }
 //! ```
 
-#[cfg(feature = "record")]
-use crate::server::record::{Recording, RecordingAcceptor, RecordingLayer};
-
 use crate::server::http_server::HttpServer;
-use crate::server::{serve, serve_addrs, Accept, BoxedToSocketAddrs, Handle, Server};
+use crate::server::{serve, serve_addrs, Accept, BoxedToSocketAddrs, Handle, MakeParts, Server};
 
 use crate::util::HyperService;
 
@@ -184,8 +181,9 @@ impl TlsServer {
 
     /// Serve provided cloneable service on all binded addresses.
     ///
-    /// Record sent and received bytes for each connection. Sent and received bytes
-    /// through a connection can be accessed through [`Request`](Request) extensions.
+    /// Record sent and received bytes for each connection **independently**. Sent and
+    /// received bytes through a connection can be accessed through [`Request`](Request)
+    /// extensions.
     ///
     /// See [`axum_server::record`](crate::server::record) module for examples.
     ///
@@ -207,41 +205,35 @@ impl TlsServer {
         let acceptor = self.tls_loader.get_acceptor().await?;
 
         self.custom_serve(
+            move |handle| HttpServer::recording_from_service(service.clone(), handle),
             move |handle| {
-                let recording = Recording::default();
-                let acceptor = RecordingAcceptor::from_recording(recording.clone());
-                let layer = RecordingLayer::new(recording);
-
-                HttpServer::new(service.clone(), handle, layer, acceptor)
-            },
-            move |handle| {
-                let recording = Recording::default();
                 let acceptor = TlsAcceptor::new(acceptor.clone());
-                let acceptor = RecordingAcceptor::new(acceptor, recording.clone());
-                let layer = RecordingLayer::new(recording);
-
-                HttpServer::new(service2.clone(), handle, layer, acceptor)
+                HttpServer::recording_new(service2.clone(), handle, acceptor)
             },
         )
         .await
     }
 
-    async fn custom_serve<F1, L1, S1, A1, F2, L2, S2, A2>(
+    async fn custom_serve<F1, S1, M1, F2, S2, M2>(
         self,
         make_server: F1,
         make_tls_server: F2,
     ) -> io::Result<()>
     where
-        F1: Fn(Handle) -> HttpServer<L1, S1, A1>,
-        L1: Layer<AddExtension<S1, SocketAddr>> + Clone + Send + Sync + 'static,
-        L1::Service: HyperService<Request<hyper::Body>>,
+        F1: Fn(Handle) -> HttpServer<S1, M1>,
         S1: HyperService<Request<hyper::Body>>,
-        A1: Accept,
-        F2: Fn(Handle) -> HttpServer<L2, S2, A2>,
-        L2: Layer<AddExtension<S2, SocketAddr>> + Clone + Send + Sync + 'static,
-        L2::Service: HyperService<Request<hyper::Body>>,
+        M1: MakeParts + Clone + Send + Sync + 'static,
+        M1::Layer: Layer<AddExtension<S1, SocketAddr>> + Clone + Send + Sync + 'static,
+        <M1::Layer as Layer<AddExtension<S1, SocketAddr>>>::Service:
+            HyperService<Request<hyper::Body>>,
+        M1::Acceptor: Accept,
+        F2: Fn(Handle) -> HttpServer<S2, M2>,
         S2: HyperService<Request<hyper::Body>>,
-        A2: Accept,
+        M2: MakeParts + Clone + Send + Sync + 'static,
+        M2::Layer: Layer<AddExtension<S2, SocketAddr>> + Clone + Send + Sync + 'static,
+        <M2::Layer as Layer<AddExtension<S2, SocketAddr>>>::Service:
+            HyperService<Request<hyper::Body>>,
+        M2::Acceptor: Accept,
     {
         serve(move |mut fut_list| async move {
             self.check_addrs()?;

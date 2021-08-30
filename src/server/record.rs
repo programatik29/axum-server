@@ -38,8 +38,8 @@
 //! }
 //! ```
 
-use crate::server::http_server::NoopAcceptor;
-use crate::server::Accept;
+use crate::server::http_server::{HttpServer, NoopAcceptor};
+use crate::server::{Accept, Handle, MakeParts};
 
 use std::io;
 use std::pin::Pin;
@@ -80,6 +80,53 @@ impl Recording {
     }
 }
 
+#[cfg(feature = "tls-rustls")]
+impl<S, A> HttpServer<S, MakeRecordingParts<A>> {
+    pub fn recording_new(service: S, handle: Handle, acceptor: A) -> Self {
+        HttpServer::new(service, handle, MakeRecordingParts::new(acceptor))
+    }
+}
+
+impl<S> HttpServer<S, MakeRecordingParts<NoopAcceptor>> {
+    pub fn recording_from_service(service: S, handle: Handle) -> Self {
+        HttpServer::new(service, handle, MakeRecordingParts::noop())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct MakeRecordingParts<A> {
+    acceptor: A,
+}
+
+impl<A> MakeRecordingParts<A> {
+    fn new(acceptor: A) -> Self {
+        Self { acceptor }
+    }
+}
+
+impl MakeRecordingParts<NoopAcceptor> {
+    fn noop() -> Self {
+        MakeRecordingParts::new(NoopAcceptor)
+    }
+}
+
+impl<A> MakeParts for MakeRecordingParts<A>
+where
+    A: Clone,
+{
+    type Layer = RecordingLayer;
+    type Acceptor = RecordingAcceptor<A>;
+
+    fn make_parts(&self) -> (Self::Layer, Self::Acceptor) {
+        let recording = Recording::default();
+
+        let layer = RecordingLayer::new(recording.clone());
+        let acceptor = RecordingAcceptor::new(self.acceptor.clone(), recording);
+
+        (layer, acceptor)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RecordingLayer {
     recording: Recording,
@@ -108,12 +155,6 @@ pub(crate) struct RecordingAcceptor<A> {
 impl<A> RecordingAcceptor<A> {
     pub fn new(inner: A, recording: Recording) -> Self {
         Self { inner, recording }
-    }
-}
-
-impl RecordingAcceptor<NoopAcceptor> {
-    pub fn from_recording(recording: Recording) -> Self {
-        RecordingAcceptor::new(NoopAcceptor, recording)
     }
 }
 

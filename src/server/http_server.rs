@@ -1,4 +1,4 @@
-use crate::server::{Accept, Handle, ListenerTask};
+use crate::server::{Accept, Handle, ListenerTask, MakeParts};
 use crate::util::HyperService;
 
 use std::io;
@@ -16,6 +16,31 @@ use tower_layer::Layer;
 use hyper::server::conn::Http;
 use hyper::Request;
 
+#[derive(Clone)]
+pub struct CloneParts<L, A> {
+    layer: L,
+    acceptor: A,
+}
+
+impl<L, A> CloneParts<L, A> {
+    fn new(layer: L, acceptor: A) -> Self {
+        Self { layer, acceptor }
+    }
+}
+
+impl<L, A> MakeParts for CloneParts<L, A>
+where
+    L: Clone,
+    A: Clone,
+{
+    type Layer = L;
+    type Acceptor = A;
+
+    fn make_parts(&self) -> (Self::Layer, Self::Acceptor) {
+        (self.layer.clone(), self.acceptor.clone())
+    }
+}
+
 #[derive(Debug)]
 enum Mode {
     Shutdown,
@@ -23,34 +48,32 @@ enum Mode {
 }
 
 #[derive(Clone)]
-pub(crate) struct HttpServer<L, S, A> {
-    layer: L,
+pub(crate) struct HttpServer<S, M> {
     service: S,
-    acceptor: A,
     handle: Handle,
+    make_parts: M,
 }
 
-impl<L, S, A> HttpServer<L, S, A> {
-    pub fn new(service: S, handle: Handle, layer: L, acceptor: A) -> Self {
+impl<S, M> HttpServer<S, M> {
+    pub fn new(service: S, handle: Handle, make_parts: M) -> Self {
         Self {
-            layer,
             service,
-            acceptor,
             handle,
+            make_parts,
         }
     }
 }
 
-impl<S> HttpServer<NoopLayer, S, NoopAcceptor> {
+impl<S> HttpServer<S, CloneParts<NoopLayer, NoopAcceptor>> {
     pub fn from_service(service: S, handle: Handle) -> Self {
-        HttpServer::new(service, handle, NoopLayer, NoopAcceptor)
+        HttpServer::new(service, handle, CloneParts::new(NoopLayer, NoopAcceptor))
     }
 }
 
 #[cfg(feature = "tls-rustls")]
-impl<S, A> HttpServer<NoopLayer, S, A> {
+impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
     pub fn from_acceptor(service: S, handle: Handle, acceptor: A) -> Self {
-        HttpServer::new(service, handle, NoopLayer, acceptor)
+        HttpServer::new(service, handle, CloneParts::new(NoopLayer, acceptor))
     }
 }
 
@@ -65,12 +88,13 @@ macro_rules! accept {
     };
 }
 
-impl<L, S, A> HttpServer<L, S, A>
+impl<S, M> HttpServer<S, M>
 where
-    L: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-    L::Service: HyperService<Request<hyper::Body>>,
     S: HyperService<Request<hyper::Body>>,
-    A: Accept + Send + Sync + 'static,
+    M: MakeParts + Clone + Send + Sync + 'static,
+    M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
+    <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service: HyperService<Request<hyper::Body>>,
+    M::Acceptor: Accept,
 {
     pub fn serve_on(&self, listener: TcpListener) -> ListenerTask {
         let server = self.clone();
@@ -80,11 +104,11 @@ where
 
             let mode = loop {
                 let (stream, addr) = accept!(&server.handle, &listener)?;
-                let acceptor = server.acceptor.clone();
+                let (layer, acceptor) = server.make_parts.make_parts();
 
                 let service = server.service.clone();
                 let service = AddExtension::new(service, addr);
-                let service = server.layer.layer(service);
+                let service = layer.layer(service);
 
                 let conn = tokio::spawn(async move {
                     if let Ok(stream) = acceptor.accept(stream).await {

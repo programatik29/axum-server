@@ -15,9 +15,6 @@ use {
     tls::{TlsLoader, TlsServer},
 };
 
-#[cfg(feature = "record")]
-use record::{Recording, RecordingAcceptor, RecordingLayer};
-
 use http_server::HttpServer;
 
 use crate::util::HyperService;
@@ -50,6 +47,13 @@ type FutList = FuturesUnordered<ListenerTask>;
 
 pub(crate) type BoxedToSocketAddrs =
     Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
+
+pub(crate) trait MakeParts {
+    type Layer;
+    type Acceptor;
+
+    fn make_parts(&self) -> (Self::Layer, Self::Acceptor);
+}
 
 pub(crate) trait Accept<I = TcpStream>: Clone + Send + Sync + 'static {
     type Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static;
@@ -181,10 +185,11 @@ impl Server {
 
     /// Serve provided cloneable service on all binded addresses.
     ///
-    /// Record sent and received bytes for each connection. Sent and received bytes
-    /// through a connection can be accessed through [`Request`](Request) extensions.
+    /// Record sent and received bytes for each connection **independently**. Sent and
+    /// received bytes through a connection can be accessed through [`Request`](Request)
+    /// extensions.
     ///
-    /// See [`axum_server::record`](record) module for examples.
+    /// See [`axum_server::record`](crate::server::record) module for examples.
     ///
     /// If accepting connection fails in any one of binded addresses, listening in all
     /// binded addresses will be stopped and then an error will be returned.
@@ -199,23 +204,19 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| {
-            let recording = Recording::default();
-            let acceptor = RecordingAcceptor::from_recording(recording.clone());
-            let layer = RecordingLayer::new(recording);
-
-            HttpServer::new(service.clone(), handle, layer, acceptor)
-        })
-        .await
+        self.custom_serve(move |handle| HttpServer::recording_from_service(service.clone(), handle))
+            .await
     }
 
-    async fn custom_serve<F, L, S, A>(self, make_server: F) -> io::Result<()>
+    async fn custom_serve<F, S, M>(self, make_server: F) -> io::Result<()>
     where
-        F: Fn(Handle) -> HttpServer<L, S, A>,
-        L: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-        L::Service: HyperService<Request<hyper::Body>>,
+        F: Fn(Handle) -> HttpServer<S, M>,
         S: HyperService<Request<hyper::Body>>,
-        A: Accept,
+        M: MakeParts + Clone + Send + Sync + 'static,
+        M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
+        <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service:
+            HyperService<Request<hyper::Body>>,
+        M::Acceptor: Accept,
     {
         serve(move |mut fut_list| async move {
             self.check_addrs()?;
@@ -384,18 +385,19 @@ where
     Ok(())
 }
 
-async fn serve_addrs<F, L, S, A>(
+async fn serve_addrs<F, S, M>(
     fut_list: &mut FutList,
     handle: Handle,
     make_server: F,
     addrs: Vec<BoxedToSocketAddrs>,
 ) -> io::Result<()>
 where
-    F: Fn(Handle) -> HttpServer<L, S, A>,
-    L: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-    L::Service: HyperService<Request<hyper::Body>>,
+    F: Fn(Handle) -> HttpServer<S, M>,
     S: HyperService<Request<hyper::Body>>,
-    A: Accept,
+    M: MakeParts + Clone + Send + Sync + 'static,
+    M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
+    <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service: HyperService<Request<hyper::Body>>,
+    M::Acceptor: Accept,
 {
     let http_server = make_server(handle.clone());
 
