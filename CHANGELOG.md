@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None.
 
+# 0.2.1 (30. August 2021)
+
+- Fixed `serve_and_record` not recording independently for each connection.
+
 # 0.2.0 (29. August 2021)
 
 - Added `TlsLoader` to reload tls configuration.
