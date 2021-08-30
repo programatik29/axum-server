@@ -34,13 +34,13 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::task::{spawn_blocking, JoinHandle};
 
-use tower_http::add_extension::AddExtension;
-use tower_layer::Layer;
-use tower_service::Service;
-
 use http::request::Request;
 use http::response::Response;
+use http::uri::Scheme;
 use http_body::Body;
+
+use tower_layer::Layer;
+use tower_service::Service;
 
 type ListenerTask = JoinHandle<io::Result<()>>;
 type FutList = FuturesUnordered<ListenerTask>;
@@ -179,7 +179,7 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| HttpServer::from_service(service.clone(), handle))
+        self.custom_serve(move |handle| HttpServer::from_service(Scheme::HTTP, service.clone(), handle))
             .await
     }
 
@@ -204,7 +204,7 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| HttpServer::recording_from_service(service.clone(), handle))
+        self.custom_serve(move |handle| HttpServer::recording_from_service(Scheme::HTTP, service.clone(), handle))
             .await
     }
 
@@ -213,8 +213,8 @@ impl Server {
         F: Fn(Handle) -> HttpServer<S, M>,
         S: HyperService<Request<hyper::Body>>,
         M: MakeParts + Clone + Send + Sync + 'static,
-        M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-        <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service:
+        M::Layer: Layer<S> + Clone + Send + Sync + 'static,
+        <M::Layer as Layer<S>>::Service:
             HyperService<Request<hyper::Body>>,
         M::Acceptor: Accept,
     {
@@ -395,8 +395,8 @@ where
     F: Fn(Handle) -> HttpServer<S, M>,
     S: HyperService<Request<hyper::Body>>,
     M: MakeParts + Clone + Send + Sync + 'static,
-    M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-    <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service: HyperService<Request<hyper::Body>>,
+    M::Layer: Layer<S> + Clone + Send + Sync + 'static,
+    <M::Layer as Layer<S>>::Service: HyperService<Request<hyper::Body>>,
     M::Acceptor: Accept,
 {
     let http_server = make_server(handle.clone());

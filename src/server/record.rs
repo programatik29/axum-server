@@ -49,6 +49,8 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use http::uri::Scheme;
+
 use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
 
@@ -82,14 +84,14 @@ impl Recording {
 
 #[cfg(feature = "tls-rustls")]
 impl<S, A> HttpServer<S, MakeRecordingParts<A>> {
-    pub(crate) fn recording_new(service: S, handle: Handle, acceptor: A) -> Self {
-        HttpServer::new(service, handle, MakeRecordingParts::new(acceptor))
+    pub(crate) fn recording_new(scheme: Scheme, service: S, handle: Handle, acceptor: A) -> Self {
+        HttpServer::new(scheme, service, handle, MakeRecordingParts::new(acceptor))
     }
 }
 
 impl<S> HttpServer<S, MakeRecordingParts<NoopAcceptor>> {
-    pub(crate) fn recording_from_service(service: S, handle: Handle) -> Self {
-        HttpServer::new(service, handle, MakeRecordingParts::noop())
+    pub(crate) fn recording_from_service(scheme: Scheme, service: S, handle: Handle) -> Self {
+        HttpServer::new(scheme, service, handle, MakeRecordingParts::noop())
     }
 }
 

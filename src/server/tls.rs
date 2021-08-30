@@ -53,9 +53,9 @@ use tokio_rustls::{server::TlsStream, Accept as AcceptFuture, TlsAcceptor as Cor
 
 use http::request::Request;
 use http::response::Response;
+use http::uri::Scheme;
 use http_body::Body;
 
-use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -170,10 +170,10 @@ impl TlsServer {
         let acceptor = self.tls_loader.get_acceptor().await?;
 
         self.custom_serve(
-            move |handle| HttpServer::from_service(service.clone(), handle),
+            move |handle| HttpServer::from_service(Scheme::HTTP, service.clone(), handle),
             move |handle| {
                 let acceptor = TlsAcceptor::new(acceptor.clone());
-                HttpServer::from_acceptor(service2.clone(), handle, acceptor)
+                HttpServer::from_acceptor(Scheme::HTTPS, service2.clone(), handle, acceptor)
             },
         )
         .await
@@ -205,10 +205,10 @@ impl TlsServer {
         let acceptor = self.tls_loader.get_acceptor().await?;
 
         self.custom_serve(
-            move |handle| HttpServer::recording_from_service(service.clone(), handle),
+            move |handle| HttpServer::recording_from_service(Scheme::HTTP, service.clone(), handle),
             move |handle| {
                 let acceptor = TlsAcceptor::new(acceptor.clone());
-                HttpServer::recording_new(service2.clone(), handle, acceptor)
+                HttpServer::recording_new(Scheme::HTTPS, service2.clone(), handle, acceptor)
             },
         )
         .await
@@ -223,15 +223,15 @@ impl TlsServer {
         F1: Fn(Handle) -> HttpServer<S1, M1>,
         S1: HyperService<Request<hyper::Body>>,
         M1: MakeParts + Clone + Send + Sync + 'static,
-        M1::Layer: Layer<AddExtension<S1, SocketAddr>> + Clone + Send + Sync + 'static,
-        <M1::Layer as Layer<AddExtension<S1, SocketAddr>>>::Service:
+        M1::Layer: Layer<S1> + Clone + Send + Sync + 'static,
+        <M1::Layer as Layer<S1>>::Service:
             HyperService<Request<hyper::Body>>,
         M1::Acceptor: Accept,
         F2: Fn(Handle) -> HttpServer<S2, M2>,
         S2: HyperService<Request<hyper::Body>>,
         M2: MakeParts + Clone + Send + Sync + 'static,
-        M2::Layer: Layer<AddExtension<S2, SocketAddr>> + Clone + Send + Sync + 'static,
-        <M2::Layer as Layer<AddExtension<S2, SocketAddr>>>::Service:
+        M2::Layer: Layer<S2> + Clone + Send + Sync + 'static,
+        <M2::Layer as Layer<S2>>::Service:
             HyperService<Request<hyper::Body>>,
         M2::Acceptor: Accept,
     {

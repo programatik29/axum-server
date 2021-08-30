@@ -2,13 +2,14 @@ use crate::server::{Accept, Handle, ListenerTask, MakeParts};
 use crate::util::HyperService;
 
 use std::io;
-use std::net::SocketAddr;
 
 use futures_util::future::Ready;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+
+use http::uri::Scheme;
 
 use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
@@ -52,11 +53,13 @@ pub(crate) struct HttpServer<S, M> {
     service: S,
     handle: Handle,
     make_parts: M,
+    scheme: Scheme,
 }
 
 impl<S, M> HttpServer<S, M> {
-    pub(crate) fn new(service: S, handle: Handle, make_parts: M) -> Self {
+    pub(crate) fn new(scheme: Scheme, service: S, handle: Handle, make_parts: M) -> Self {
         Self {
+            scheme,
             service,
             handle,
             make_parts,
@@ -65,15 +68,15 @@ impl<S, M> HttpServer<S, M> {
 }
 
 impl<S> HttpServer<S, CloneParts<NoopLayer, NoopAcceptor>> {
-    pub(crate) fn from_service(service: S, handle: Handle) -> Self {
-        HttpServer::new(service, handle, CloneParts::new(NoopLayer, NoopAcceptor))
+    pub(crate) fn from_service(scheme: Scheme, service: S, handle: Handle) -> Self {
+        HttpServer::new(scheme, service, handle, CloneParts::new(NoopLayer, NoopAcceptor))
     }
 }
 
 #[cfg(feature = "tls-rustls")]
 impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
-    pub(crate) fn from_acceptor(service: S, handle: Handle, acceptor: A) -> Self {
-        HttpServer::new(service, handle, CloneParts::new(NoopLayer, acceptor))
+    pub(crate) fn from_acceptor(scheme: Scheme, service: S, handle: Handle, acceptor: A) -> Self {
+        HttpServer::new(scheme, service, handle, CloneParts::new(NoopLayer, acceptor))
     }
 }
 
@@ -92,8 +95,8 @@ impl<S, M> HttpServer<S, M>
 where
     S: HyperService<Request<hyper::Body>>,
     M: MakeParts + Clone + Send + Sync + 'static,
-    M::Layer: Layer<AddExtension<S, SocketAddr>> + Clone + Send + Sync + 'static,
-    <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service: HyperService<Request<hyper::Body>>,
+    M::Layer: Layer<S> + Clone + Send + Sync + 'static,
+    <M::Layer as Layer<S>>::Service: HyperService<Request<hyper::Body>>,
     M::Acceptor: Accept,
 {
     pub(crate) fn serve_on(&self, listener: TcpListener) -> ListenerTask {
@@ -107,8 +110,9 @@ where
                 let (layer, acceptor) = server.make_parts.make_parts();
 
                 let service = server.service.clone();
-                let service = AddExtension::new(service, addr);
                 let service = layer.layer(service);
+                let service = AddExtension::new(service, addr);
+                let service = AddExtension::new(service, server.scheme.clone());
 
                 let conn = tokio::spawn(async move {
                     if let Ok(stream) = acceptor.accept(stream).await {
