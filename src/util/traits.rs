@@ -3,7 +3,7 @@ use hyper::Response;
 use std::future::Future;
 use tower_service::Service;
 
-pub trait HyperService<Request>
+pub(crate) trait HyperService<Request>
 where
     Self: Service<
             Request,
@@ -33,7 +33,7 @@ where
     type RespBody = B;
 }
 
-pub trait SendBody
+pub(crate) trait SendBody
 where
     Self: Body<Data = Self::SendData, Error = Self::BoxedError> + Send + 'static,
 {

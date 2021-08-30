@@ -1,3 +1,3 @@
 mod traits;
 
-pub use traits::{HyperService, SendBody};
+pub(crate) use traits::HyperService;

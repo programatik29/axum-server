@@ -82,13 +82,13 @@ impl Recording {
 
 #[cfg(feature = "tls-rustls")]
 impl<S, A> HttpServer<S, MakeRecordingParts<A>> {
-    pub fn recording_new(service: S, handle: Handle, acceptor: A) -> Self {
+    pub(crate) fn recording_new(service: S, handle: Handle, acceptor: A) -> Self {
         HttpServer::new(service, handle, MakeRecordingParts::new(acceptor))
     }
 }
 
 impl<S> HttpServer<S, MakeRecordingParts<NoopAcceptor>> {
-    pub fn recording_from_service(service: S, handle: Handle) -> Self {
+    pub(crate) fn recording_from_service(service: S, handle: Handle) -> Self {
         HttpServer::new(service, handle, MakeRecordingParts::noop())
     }
 }
@@ -133,7 +133,7 @@ pub(crate) struct RecordingLayer {
 }
 
 impl RecordingLayer {
-    pub fn new(recording: Recording) -> Self {
+    pub(crate) fn new(recording: Recording) -> Self {
         Self { recording }
     }
 }
@@ -153,7 +153,7 @@ pub(crate) struct RecordingAcceptor<A> {
 }
 
 impl<A> RecordingAcceptor<A> {
-    pub fn new(inner: A, recording: Recording) -> Self {
+    pub(crate) fn new(inner: A, recording: Recording) -> Self {
         Self { inner, recording }
     }
 }
@@ -179,7 +179,7 @@ pub(crate) struct RecordingStream<I> {
 }
 
 impl<I> RecordingStream<I> {
-    pub fn new(inner: I, recording: Recording) -> Self {
+    pub(crate) fn new(inner: I, recording: Recording) -> Self {
         Self { inner, recording }
     }
 }

@@ -17,7 +17,7 @@ use hyper::server::conn::Http;
 use hyper::Request;
 
 #[derive(Clone)]
-pub struct CloneParts<L, A> {
+pub(crate) struct CloneParts<L, A> {
     layer: L,
     acceptor: A,
 }
@@ -55,7 +55,7 @@ pub(crate) struct HttpServer<S, M> {
 }
 
 impl<S, M> HttpServer<S, M> {
-    pub fn new(service: S, handle: Handle, make_parts: M) -> Self {
+    pub(crate) fn new(service: S, handle: Handle, make_parts: M) -> Self {
         Self {
             service,
             handle,
@@ -65,14 +65,14 @@ impl<S, M> HttpServer<S, M> {
 }
 
 impl<S> HttpServer<S, CloneParts<NoopLayer, NoopAcceptor>> {
-    pub fn from_service(service: S, handle: Handle) -> Self {
+    pub(crate) fn from_service(service: S, handle: Handle) -> Self {
         HttpServer::new(service, handle, CloneParts::new(NoopLayer, NoopAcceptor))
     }
 }
 
 #[cfg(feature = "tls-rustls")]
 impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
-    pub fn from_acceptor(service: S, handle: Handle, acceptor: A) -> Self {
+    pub(crate) fn from_acceptor(service: S, handle: Handle, acceptor: A) -> Self {
         HttpServer::new(service, handle, CloneParts::new(NoopLayer, acceptor))
     }
 }
@@ -96,7 +96,7 @@ where
     <M::Layer as Layer<AddExtension<S, SocketAddr>>>::Service: HyperService<Request<hyper::Body>>,
     M::Acceptor: Accept,
 {
-    pub fn serve_on(&self, listener: TcpListener) -> ListenerTask {
+    pub(crate) fn serve_on(&self, listener: TcpListener) -> ListenerTask {
         let server = self.clone();
 
         tokio::spawn(async move {
@@ -151,7 +151,7 @@ async fn wait_conns(conns: &mut Vec<JoinHandle<()>>) {
 }
 
 #[derive(Clone)]
-pub struct NoopAcceptor;
+pub(crate) struct NoopAcceptor;
 
 impl<I> Accept<I> for NoopAcceptor
 where
@@ -166,7 +166,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct NoopLayer;
+pub(crate) struct NoopLayer;
 
 impl<S> Layer<S> for NoopLayer {
     type Service = S;
