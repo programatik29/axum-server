@@ -69,14 +69,24 @@ impl<S, M> HttpServer<S, M> {
 
 impl<S> HttpServer<S, CloneParts<NoopLayer, NoopAcceptor>> {
     pub(crate) fn from_service(scheme: Scheme, service: S, handle: Handle) -> Self {
-        HttpServer::new(scheme, service, handle, CloneParts::new(NoopLayer, NoopAcceptor))
+        HttpServer::new(
+            scheme,
+            service,
+            handle,
+            CloneParts::new(NoopLayer, NoopAcceptor),
+        )
     }
 }
 
 #[cfg(feature = "tls-rustls")]
 impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
     pub(crate) fn from_acceptor(scheme: Scheme, service: S, handle: Handle, acceptor: A) -> Self {
-        HttpServer::new(scheme, service, handle, CloneParts::new(NoopLayer, acceptor))
+        HttpServer::new(
+            scheme,
+            service,
+            handle,
+            CloneParts::new(NoopLayer, acceptor),
+        )
     }
 }
 

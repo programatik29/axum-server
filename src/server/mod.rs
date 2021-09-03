@@ -179,8 +179,10 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| HttpServer::from_service(Scheme::HTTP, service.clone(), handle))
-            .await
+        self.custom_serve(move |handle| {
+            HttpServer::from_service(Scheme::HTTP, service.clone(), handle)
+        })
+        .await
     }
 
     /// Serve provided cloneable service on all binded addresses.
@@ -204,8 +206,10 @@ impl Server {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        self.custom_serve(move |handle| HttpServer::recording_from_service(Scheme::HTTP, service.clone(), handle))
-            .await
+        self.custom_serve(move |handle| {
+            HttpServer::recording_from_service(Scheme::HTTP, service.clone(), handle)
+        })
+        .await
     }
 
     async fn custom_serve<F, S, M>(self, make_server: F) -> io::Result<()>
@@ -214,8 +218,7 @@ impl Server {
         S: HyperService<Request<hyper::Body>>,
         M: MakeParts + Clone + Send + Sync + 'static,
         M::Layer: Layer<S> + Clone + Send + Sync + 'static,
-        <M::Layer as Layer<S>>::Service:
-            HyperService<Request<hyper::Body>>,
+        <M::Layer as Layer<S>>::Service: HyperService<Request<hyper::Body>>,
         M::Acceptor: Accept,
     {
         serve(move |mut fut_list| async move {

@@ -32,7 +32,9 @@
 //! When `record` feature is enabled, [`serve_and_record`](Server::serve_and_record) method can be
 //! used to record incoming and outgoing bytes. See [module](record) page for getting recorded bytes.
 //!
-//! # Example
+//! # Examples
+//!
+//! ## Hello World
 //!
 //! [`axum`] "Hello, World!" example can be run like:
 //!
@@ -50,6 +52,27 @@
 //!         .serve(app)
 //!         .await
 //!         .unwrap();
+//! }
+//! ```
+//!
+//! ## Remote Address
+//!
+//! ```rust,no_run
+//! use axum::{extract::Extension, handler::get, Router};
+//! use std::net::SocketAddr;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let app = Router::new().route("/", get(handler));
+//!
+//!     axum_server::bind("127.0.0.1:3000")
+//!         .serve(app)
+//!         .await
+//!         .unwrap();
+//! }
+//!
+//! async fn handler(Extension(addr): Extension<SocketAddr>) -> String {
+//!     format!("addr: {}", addr)
 //! }
 //! ```
 //!

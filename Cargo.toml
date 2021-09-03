@@ -55,6 +55,10 @@ name = "plain_and_tls"
 required-features = ["tls-rustls"]
 
 [[example]]
+name = "uri_scheme"
+required-features = ["tls-rustls"]
+
+[[example]]
 name = "tls_reload"
 required-features = ["tls-rustls"]
 

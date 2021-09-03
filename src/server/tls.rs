@@ -2,7 +2,9 @@
 //!
 //! [`TlsServer`](TlsServer) can be used just like [`Server`](crate::server::Server) to serve apps.
 //!
-//! # Example
+//! # Examples
+//!
+//! ## Hello World
 //!
 //! ```rust,no_run
 //! use axum::{
@@ -19,11 +21,36 @@
 //!     Server::new()
 //!         .bind("127.0.0.1:3000")
 //!         .bind_rustls("127.0.0.1:3443")
-//!         .private_key_file("certs/key.pem")
-//!         .certificate_file("certs/cert.pem")
+//!         .private_key_file("examples/self-signed-certs/key.pem")
+//!         .certificate_file("examples/self-signed-certs/cert.pem")
 //!         .serve(app)
 //!         .await
 //!         .unwrap();
+//! }
+//! ```
+//!
+//! ## Uri Scheme
+//!
+//! ```rust,no_run
+//! use axum::{extract::Extension, handler::get, http::uri::Scheme, Router};
+//! use axum_server::Server;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let app = Router::new().route("/", get(handler));
+//!
+//!     Server::new()
+//!         .bind("127.0.0.1:3000")
+//!         .bind_rustls("127.0.0.1:3443")
+//!         .private_key_file("examples/self-signed-certs/key.pem")
+//!         .certificate_file("examples/self-signed-certs/cert.pem")
+//!         .serve(app)
+//!         .await
+//!         .unwrap();
+//! }
+//!
+//! async fn handler(Extension(scheme): Extension<Scheme>) -> String {
+//!     format!("scheme: {}", scheme)
 //! }
 //! ```
 
@@ -224,15 +251,13 @@ impl TlsServer {
         S1: HyperService<Request<hyper::Body>>,
         M1: MakeParts + Clone + Send + Sync + 'static,
         M1::Layer: Layer<S1> + Clone + Send + Sync + 'static,
-        <M1::Layer as Layer<S1>>::Service:
-            HyperService<Request<hyper::Body>>,
+        <M1::Layer as Layer<S1>>::Service: HyperService<Request<hyper::Body>>,
         M1::Acceptor: Accept,
         F2: Fn(Handle) -> HttpServer<S2, M2>,
         S2: HyperService<Request<hyper::Body>>,
         M2: MakeParts + Clone + Send + Sync + 'static,
         M2::Layer: Layer<S2> + Clone + Send + Sync + 'static,
-        <M2::Layer as Layer<S2>>::Service:
-            HyperService<Request<hyper::Body>>,
+        <M2::Layer as Layer<S2>>::Service: HyperService<Request<hyper::Body>>,
         M2::Acceptor: Accept,
     {
         serve(move |mut fut_list| async move {
@@ -305,8 +330,8 @@ impl From<Server> for TlsServer {
 ///
 ///     // Must be loaded before passing.
 ///     loader
-///         .private_key_file("certs/key.pem")
-///         .certificate_file("certs/cert.pem")
+///         .private_key_file("examples/self-signed-certs/key.pem")
+///         .certificate_file("examples/self-signed-certs/cert.pem")
 ///         .load()
 ///         .await
 ///         .unwrap();
@@ -331,8 +356,8 @@ impl From<Server> for TlsServer {
 ///
 ///         // Can overwrite settings and load.
 ///         loader
-///             .private_key_file("certs/private_key.pem")
-///             .certificate_file("certs/fullchain.pem")
+///             .private_key_file("examples/self-signed-certs/reload/key.pem")
+///             .certificate_file("examples/self-signed-certs/reload/cert.pem")
 ///             .load()
 ///             .await
 ///             .unwrap();
