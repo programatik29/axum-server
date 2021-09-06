@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None.
 
+# 0.2.2 (6. September 2021)
+
+- Added uri `Scheme` in `Request` extensions.
+- Fixed memory leak that happens as connections are accepted.
+
 # 0.2.1 (30. August 2021)
 
 - Fixed `serve_and_record` not recording independently for each connection.
