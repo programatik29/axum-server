@@ -2,8 +2,11 @@ use crate::server::{Accept, Handle, ListenerTask, MakeParts};
 use crate::util::HyperService;
 
 use std::io;
+use std::pin::Pin;
+use std::task::Poll;
 
 use futures_util::future::Ready;
+use futures_util::stream::{Stream, StreamExt, FuturesUnordered};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -16,6 +19,8 @@ use tower_layer::Layer;
 
 use hyper::server::conn::Http;
 use hyper::Request;
+
+type FutList = FuturesUnordered<JoinHandle<()>>;
 
 #[derive(Clone)]
 pub(crate) struct CloneParts<L, A> {
@@ -91,14 +96,25 @@ impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
 }
 
 macro_rules! accept {
-    ($handle:expr, $listener:expr) => {
+    ($conns:expr, $handle:expr, $listener:expr) => {
         tokio::select! {
             biased;
             _ = $handle.shutdown_signal() => break Mode::Shutdown,
             _ = $handle.graceful_shutdown_signal() => break Mode::Graceful,
             result = $listener.accept() => result,
+            _ = poll_list(&mut $conns) => unreachable!(),
         }
     };
+}
+
+macro_rules! clear_finished {
+    ($conns:expr) => {
+        futures_util::future::poll_fn(|cx| {
+            while let Poll::Ready(_) = Pin::new(&mut $conns).poll_next(cx) {}
+
+            Poll::Ready(())
+        }).await;
+    }
 }
 
 impl<S, M> HttpServer<S, M>
@@ -113,10 +129,10 @@ where
         let server = self.clone();
 
         tokio::spawn(async move {
-            let mut conns = Vec::new();
+            let mut conns = FuturesUnordered::new();
 
             let mode = loop {
-                let (stream, addr) = accept!(&server.handle, &listener)?;
+                let (stream, addr) = accept!(conns, server.handle, listener)?;
                 let (layer, acceptor) = server.make_parts.make_parts();
 
                 let service = server.service.clone();
@@ -134,6 +150,8 @@ where
                 });
 
                 conns.push(conn);
+
+                clear_finished!(conns);
             };
 
             drop(listener);
@@ -152,16 +170,18 @@ where
     }
 }
 
-fn shutdown_conns(conns: Vec<JoinHandle<()>>) {
-    for conn in conns {
-        conn.abort();
-    }
+async fn poll_list(conns: &mut FutList) {
+    while let Some(_) = conns.next().await {}
+
+    std::future::pending::<()>().await;
 }
 
-async fn wait_conns(conns: &mut Vec<JoinHandle<()>>) {
-    for conn in conns {
-        let _ = conn.await;
-    }
+fn shutdown_conns(conns: FutList) {
+    conns.iter().for_each(|conn| conn.abort());
+}
+
+async fn wait_conns(conns: &mut FutList) {
+    while let Some(_) = conns.next().await {}
 }
 
 #[derive(Clone)]
