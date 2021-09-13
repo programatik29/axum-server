@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None.
 
+# 0.2.3 (14. September 2021)
+
+- Fixed `bind` and `bind_rustls` not working on some types.
+
 # 0.2.2 (6. September 2021)
 
 - Added uri `Scheme` in `Request` extensions.
