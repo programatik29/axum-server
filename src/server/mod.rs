@@ -7,6 +7,7 @@ pub mod tls;
 pub mod record;
 
 mod http_server;
+mod socket_addrs;
 
 #[cfg(feature = "tls-rustls")]
 use {
@@ -16,6 +17,7 @@ use {
 };
 
 use http_server::HttpServer;
+use socket_addrs::ToSocketAddrsExt;
 
 use crate::util::HyperService;
 
@@ -45,9 +47,6 @@ use tower_service::Service;
 type ListenerTask = JoinHandle<io::Result<()>>;
 type FutList = FuturesUnordered<ListenerTask>;
 
-pub(crate) type BoxedToSocketAddrs =
-    Box<dyn ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send>;
-
 pub(crate) trait MakeParts {
     type Layer;
     type Acceptor;
@@ -69,7 +68,7 @@ pub(crate) trait Accept<I = TcpStream>: Clone + Send + Sync + 'static {
 /// See [main](crate) page for HTTP example. See [`axum_server::tls`](tls) module for HTTPS example.
 #[derive(Default)]
 pub struct Server {
-    addrs: Vec<BoxedToSocketAddrs>,
+    addrs: Vec<socket_addrs::Boxed>,
     handle: Handle,
 }
 
@@ -82,11 +81,15 @@ impl Server {
     }
 
     /// Bind to a single address or multiple addresses.
-    pub fn bind<A>(mut self, addr: A) -> Self
+    pub fn bind<A, I>(mut self, addr: A) -> Self
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+        A: ToSocketAddrs<Iter = I> + Send + 'static,
+        I: Iterator<Item = SocketAddr> + 'static,
     {
-        self.addrs.push(Box::new(addr));
+        self.addrs.push(Box::new(addr.map(|iter| {
+            let box_iter: socket_addrs::BoxedIterator = Box::new(iter);
+            box_iter
+        })));
         self
     }
 
@@ -95,9 +98,10 @@ impl Server {
     /// Certificate and private key must be set before or after calling this.
     #[cfg(feature = "tls-rustls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-    pub fn bind_rustls<A>(self, addr: A) -> TlsServer
+    pub fn bind_rustls<A, I>(self, addr: A) -> TlsServer
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+        A: ToSocketAddrs<Iter = I> + Send + 'static,
+        I: Iterator<Item = SocketAddr> + 'static,
     {
         TlsServer::from(self).bind_rustls(addr)
     }
@@ -248,9 +252,10 @@ impl Server {
 }
 
 /// Shortcut for creating [`Server`](Server::new) and calling [`bind`](Server::bind) on it.
-pub fn bind<A>(addr: A) -> Server
+pub fn bind<A, I>(addr: A) -> Server
 where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+    A: ToSocketAddrs<Iter = I> + Send + 'static,
+    I: Iterator<Item = SocketAddr> + 'static,
 {
     Server::new().bind(addr)
 }
@@ -258,9 +263,10 @@ where
 /// Shortcut for creating [`Server`](Server::new) and calling [`bind_rustls`](Server::bind_rustls) on it.
 #[cfg(feature = "tls-rustls")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-pub fn bind_rustls<A>(addr: A) -> TlsServer
+pub fn bind_rustls<A, I>(addr: A) -> TlsServer
 where
-    A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+    A: ToSocketAddrs<Iter = I> + Send + 'static,
+    I: Iterator<Item = SocketAddr> + 'static,
 {
     Server::new().bind_rustls(addr)
 }
@@ -392,7 +398,7 @@ async fn serve_addrs<F, S, M>(
     fut_list: &mut FutList,
     handle: Handle,
     make_server: F,
-    addrs: Vec<BoxedToSocketAddrs>,
+    addrs: Vec<socket_addrs::Boxed>,
 ) -> io::Result<()>
 where
     F: Fn(Handle) -> HttpServer<S, M>,
@@ -417,7 +423,7 @@ where
 }
 
 pub(crate) fn collect_addrs(
-    addrs: Vec<BoxedToSocketAddrs>,
+    addrs: Vec<socket_addrs::Boxed>,
 ) -> JoinHandle<io::Result<Vec<SocketAddr>>> {
     spawn_blocking(move || {
         let mut vec = Vec::new();

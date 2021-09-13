@@ -55,7 +55,8 @@
 //! ```
 
 use crate::server::http_server::HttpServer;
-use crate::server::{serve, serve_addrs, Accept, BoxedToSocketAddrs, Handle, MakeParts, Server};
+use crate::server::socket_addrs::{self, ToSocketAddrsExt};
+use crate::server::{serve, serve_addrs, Accept, Handle, MakeParts, Server};
 
 use crate::util::HyperService;
 
@@ -92,7 +93,7 @@ use tower_service::Service;
 #[derive(Default)]
 pub struct TlsServer {
     server: Server,
-    tls_addrs: Vec<BoxedToSocketAddrs>,
+    tls_addrs: Vec<socket_addrs::Boxed>,
     tls_loader: TlsLoader,
 }
 
@@ -103,9 +104,10 @@ impl TlsServer {
     }
 
     /// Bind to a single address or multiple addresses.
-    pub fn bind<A>(mut self, addr: A) -> Self
+    pub fn bind<A, I>(mut self, addr: A) -> Self
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+        A: ToSocketAddrs<Iter = I> + Send + 'static,
+        I: Iterator<Item = SocketAddr> + 'static,
     {
         self.server = self.server.bind(addr);
         self
@@ -121,11 +123,15 @@ impl TlsServer {
     /// Bind to a single address or multiple addresses. Using tls protocol on streams.
     ///
     /// Certificate and private key must be set before or after calling this.
-    pub fn bind_rustls<A>(mut self, addr: A) -> Self
+    pub fn bind_rustls<A, I>(mut self, addr: A) -> Self
     where
-        A: ToSocketAddrs<Iter = std::vec::IntoIter<SocketAddr>> + Send + 'static,
+        A: ToSocketAddrs<Iter = I> + Send + 'static,
+        I: Iterator<Item = SocketAddr> + 'static,
     {
-        self.tls_addrs.push(Box::new(addr));
+        self.tls_addrs.push(Box::new(addr.map(|iter| {
+            let box_iter: socket_addrs::BoxedIterator = Box::new(iter);
+            box_iter
+        })));
         self
     }
 
