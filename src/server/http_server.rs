@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::Poll;
 
 use futures_util::future::Ready;
-use futures_util::stream::{Stream, StreamExt, FuturesUnordered};
+use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -113,8 +113,9 @@ macro_rules! clear_finished {
             while let Poll::Ready(_) = Pin::new(&mut $conns).poll_next(cx) {}
 
             Poll::Ready(())
-        }).await;
-    }
+        })
+        .await;
+    };
 }
 
 impl<S, M> HttpServer<S, M>
