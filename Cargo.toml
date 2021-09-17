@@ -16,7 +16,7 @@ record = []
 tls-rustls = ["rustls", "tokio-rustls"]
 
 [dependencies]
-futures-util = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 http = "0.2"
 http-body = "0.4"
 hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
