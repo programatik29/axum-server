@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 None.
 
+# 0.2.4 (17. September 2021)
+
+- Reduced `futures-util` features to improve compile times.
+
 # 0.2.3 (14. September 2021)
 
 - Fixed `bind` and `bind_rustls` not working on some types.
