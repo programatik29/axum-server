@@ -1,4 +1,4 @@
-use self::{http_server::HttpServer, socket_addrs::ToSocketAddrsExt};
+use self::http_server::HttpServer;
 use crate::util::HyperService;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use http::{uri::Scheme, Request, Response};
@@ -45,7 +45,7 @@ type FutList = FuturesUnordered<ListenerTask>;
 /// `Server` can conveniently be turned into a [`TlsServer`](TlsServer) with related methods.
 ///
 /// See [main](crate) page for HTTP example. See [`axum_server::tls`](tls) module for HTTPS example.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Server {
     addrs: Vec<socket_addrs::Boxed>,
     handle: Handle,
@@ -65,10 +65,9 @@ impl Server {
         A: ToSocketAddrs<Iter = I> + Send + 'static,
         I: Iterator<Item = SocketAddr> + 'static,
     {
-        self.addrs.push(Box::new(addr.map(|iter| {
-            let box_iter: socket_addrs::BoxedIterator = Box::new(iter);
-            box_iter
-        })));
+        let boxed = socket_addrs::Boxed::new(addr);
+
+        self.addrs.push(boxed);
         self
     }
 
@@ -283,12 +282,12 @@ where
 ///     handle.shutdown();
 /// }
 /// ```
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Handle {
     inner: Arc<HandleInner>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct HandleInner {
     listening: Notify,
     listening_addrs: RwLock<Option<Vec<SocketAddr>>>,

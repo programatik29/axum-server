@@ -1,9 +1,39 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::{
+    fmt, io,
+    net::{SocketAddr, ToSocketAddrs},
+};
 
-pub(crate) type BoxedIterator = Box<dyn Iterator<Item = SocketAddr>>;
-pub(crate) type Boxed = Box<dyn ToSocketAddrs<Iter = BoxedIterator> + Send>;
+type BoxedIterator = Box<dyn Iterator<Item = SocketAddr>>;
 
-pub(crate) struct Map<T, F> {
+pub(crate) struct Boxed(Box<dyn ToSocketAddrs<Iter = BoxedIterator> + Send>);
+
+impl Boxed {
+    pub(crate) fn new<A, I>(addr: A) -> Self
+    where
+        A: ToSocketAddrs<Iter = I> + Send + 'static,
+        I: Iterator<Item = SocketAddr> + 'static,
+    {
+        let boxed_iter = addr.map(|iter| Box::new(iter) as BoxedIterator);
+
+        Self(Box::new(boxed_iter))
+    }
+}
+
+impl fmt::Debug for Boxed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToSocketAddrs").finish()
+    }
+}
+
+impl ToSocketAddrs for Boxed {
+    type Iter = BoxedIterator;
+
+    fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
+        self.0.to_socket_addrs()
+    }
+}
+
+struct Map<T, F> {
     inner: T,
     f: F,
 }
@@ -16,7 +46,7 @@ where
 {
     type Iter = I;
 
-    fn to_socket_addrs(&self) -> std::io::Result<Self::Iter> {
+    fn to_socket_addrs(&self) -> io::Result<Self::Iter> {
         match self.inner.to_socket_addrs() {
             Ok(iter) => Ok((self.f)(iter)),
             Err(e) => Err(e),
@@ -24,7 +54,7 @@ where
     }
 }
 
-pub(crate) trait ToSocketAddrsExt: ToSocketAddrs {
+trait ToSocketAddrsExt: ToSocketAddrs {
     fn map<F>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,

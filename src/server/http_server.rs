@@ -188,7 +188,6 @@ impl<S> Layer<S> for NoopLayer {
     }
 }
 
-#[derive(Debug)]
 enum Mode {
     Shutdown,
     Graceful,

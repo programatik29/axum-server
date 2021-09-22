@@ -57,7 +57,7 @@ use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
 
 /// Type to access data that is being recorded in real-time.
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Recording {
     inner: Arc<RecordingInner>,
 }
@@ -78,7 +78,7 @@ impl Recording {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct RecordingInner {
     sent: AtomicUsize,
     received: AtomicUsize,

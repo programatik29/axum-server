@@ -112,6 +112,7 @@
     rust_2018_idioms,
     future_incompatible,
     nonstandard_style,
+    missing_debug_implementations,
     missing_docs
 )]
 #![deny(unreachable_pub, private_in_public)]

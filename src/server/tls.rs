@@ -56,9 +56,8 @@
 
 use crate::{
     server::{
-        http_server::HttpServer,
-        socket_addrs::{self, ToSocketAddrsExt},
-        {serve, serve_addrs, Accept, Handle, MakeParts, Server},
+        http_server::HttpServer, serve, serve_addrs, socket_addrs, Accept, Handle, MakeParts,
+        Server,
     },
     util::HyperService,
 };
@@ -70,6 +69,7 @@ use rustls::{
     Certificate, NoClientAuth, PrivateKey, ServerConfig,
 };
 use std::{
+    fmt,
     fs::File,
     io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
     net::{SocketAddr, ToSocketAddrs},
@@ -87,7 +87,7 @@ use tower_service::Service;
 /// Configurable HTTP and HTTPS server, supporting HTTP/1.1 and HTTP2.
 ///
 /// See [module](crate::server::tls) page for examples.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct TlsServer {
     server: Server,
     tls_addrs: Vec<socket_addrs::Boxed>,
@@ -125,10 +125,9 @@ impl TlsServer {
         A: ToSocketAddrs<Iter = I> + Send + 'static,
         I: Iterator<Item = SocketAddr> + 'static,
     {
-        self.tls_addrs.push(Box::new(addr.map(|iter| {
-            let box_iter: socket_addrs::BoxedIterator = Box::new(iter);
-            box_iter
-        })));
+        let boxed = socket_addrs::Boxed::new(addr);
+
+        self.tls_addrs.push(boxed);
         self
     }
 
@@ -367,7 +366,7 @@ impl From<Server> for TlsServer {
 ///     }
 /// }
 /// ```
-#[derive(Default, Clone)]
+#[derive(Clone, Default)]
 pub struct TlsLoader {
     server_config: Option<Arc<ServerConfig>>,
     private_key: Option<Vec<u8>>,
@@ -375,6 +374,17 @@ pub struct TlsLoader {
     private_key_path: Option<PathBuf>,
     certificate_path: Option<PathBuf>,
     acceptor: Option<Arc<RwLock<CoreTlsAcceptor>>>,
+}
+
+impl fmt::Debug for TlsLoader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TlsLoader")
+            .field("private_key", &self.private_key)
+            .field("certificate", &self.certificate)
+            .field("private_key_path", &self.private_key_path)
+            .field("certificate_path", &self.certificate_path)
+            .finish()
+    }
 }
 
 impl TlsLoader {
