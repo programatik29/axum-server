@@ -1,13 +1,23 @@
-#[cfg(feature = "tls-rustls")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-pub mod tls;
-
-#[cfg(feature = "record")]
-#[cfg_attr(docsrs, doc(cfg(feature = "record")))]
-pub mod record;
-
-mod http_server;
-mod socket_addrs;
+use self::{http_server::HttpServer, socket_addrs::ToSocketAddrsExt};
+use crate::util::HyperService;
+use futures_util::stream::{FuturesUnordered, StreamExt};
+use http::{uri::Scheme, Request, Response};
+use http_body::Body;
+use parking_lot::RwLock;
+use std::{
+    future::Future,
+    io::{self, ErrorKind},
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, TcpStream},
+    sync::Notify,
+    task::{spawn_blocking, JoinHandle},
+};
+use tower_layer::Layer;
+use tower_service::Service;
 
 #[cfg(feature = "tls-rustls")]
 use {
@@ -16,50 +26,19 @@ use {
     tls::{TlsLoader, TlsServer},
 };
 
-use http_server::HttpServer;
-use socket_addrs::ToSocketAddrsExt;
+mod http_server;
+mod socket_addrs;
 
-use crate::util::HyperService;
+#[cfg(feature = "tls-rustls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+pub mod tls;
 
-use std::future::Future;
-use std::io;
-use std::io::ErrorKind;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
-use futures_util::stream::{FuturesUnordered, StreamExt};
-
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
-use tokio::task::{spawn_blocking, JoinHandle};
-
-use http::request::Request;
-use http::response::Response;
-use http::uri::Scheme;
-use http_body::Body;
-
-use tower_layer::Layer;
-use tower_service::Service;
+#[cfg(feature = "record")]
+#[cfg_attr(docsrs, doc(cfg(feature = "record")))]
+pub mod record;
 
 type ListenerTask = JoinHandle<io::Result<()>>;
 type FutList = FuturesUnordered<ListenerTask>;
-
-pub(crate) trait MakeParts {
-    type Layer;
-    type Acceptor;
-
-    fn make_parts(&self) -> (Self::Layer, Self::Acceptor);
-}
-
-pub(crate) trait Accept<I = TcpStream>: Clone + Send + Sync + 'static {
-    type Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static;
-    type Future: Future<Output = io::Result<Self::Conn>> + Send;
-
-    fn accept(&self, conn: I) -> Self::Future;
-}
 
 /// Configurable HTTP server, supporting HTTP/1.1 and HTTP2.
 ///
@@ -374,6 +353,20 @@ impl Handle {
     }
 }
 
+pub(crate) trait MakeParts {
+    type Layer;
+    type Acceptor;
+
+    fn make_parts(&self) -> (Self::Layer, Self::Acceptor);
+}
+
+pub(crate) trait Accept<I = TcpStream>: Clone + Send + Sync + 'static {
+    type Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+    type Future: Future<Output = io::Result<Self::Conn>> + Send;
+
+    fn accept(&self, conn: I) -> Self::Future;
+}
+
 async fn serve<F, Fut>(fut: F) -> io::Result<()>
 where
     F: FnOnce(FutList) -> Fut,
@@ -443,15 +436,14 @@ pub(crate) fn collect_addrs(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{bind, collect_addrs, Handle, Server};
-
     use axum::handler::get;
     use http::{Request, Response};
-    use hyper::client::conn::{handshake, SendRequest};
-    use hyper::Body;
-    use std::io;
-    use std::net::SocketAddr;
-    use tokio::net::TcpStream;
-    use tokio::task::JoinHandle;
+    use hyper::{
+        client::conn::{handshake, SendRequest},
+        Body,
+    };
+    use std::{io, net::SocketAddr};
+    use tokio::{net::TcpStream, task::JoinHandle};
     use tower_service::Service;
     use tower_util::ServiceExt;
 

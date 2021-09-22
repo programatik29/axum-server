@@ -54,36 +54,33 @@
 //! }
 //! ```
 
-use crate::server::http_server::HttpServer;
-use crate::server::socket_addrs::{self, ToSocketAddrsExt};
-use crate::server::{serve, serve_addrs, Accept, Handle, MakeParts, Server};
-
-use crate::util::HyperService;
-
-use std::fs::File;
-use std::io;
-use std::io::{BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom};
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::task::spawn_blocking;
-
-use rustls::{
-    internal::pemfile::certs, internal::pemfile::pkcs8_private_keys,
-    internal::pemfile::rsa_private_keys, Certificate, NoClientAuth, PrivateKey, ServerConfig,
+use crate::{
+    server::{
+        http_server::HttpServer,
+        socket_addrs::{self, ToSocketAddrsExt},
+        {serve, serve_addrs, Accept, Handle, MakeParts, Server},
+    },
+    util::HyperService,
 };
-
-use tokio_rustls::{server::TlsStream, Accept as AcceptFuture, TlsAcceptor as CoreTlsAcceptor};
-
-use http::request::Request;
-use http::response::Response;
-use http::uri::Scheme;
+use http::{uri::Scheme, Request, Response};
 use http_body::Body;
-
+use parking_lot::RwLock;
+use rustls::{
+    internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
+    Certificate, NoClientAuth, PrivateKey, ServerConfig,
+};
+use std::{
+    fs::File,
+    io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
+    net::{SocketAddr, ToSocketAddrs},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    task::spawn_blocking,
+};
+use tokio_rustls::{server::TlsStream, Accept as AcceptFuture, TlsAcceptor as CoreTlsAcceptor};
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -593,6 +590,27 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::{cert_from_value, pkey_from_value, rustls_config, Handle};
+    use crate::server::{
+        bind_rustls, collect_addrs,
+        tests::{empty_request, into_text},
+        Server,
+    };
+    use axum::handler::get;
+    use hyper::{
+        client::conn::{handshake, SendRequest},
+        Body,
+    };
+    use rustls::{
+        Certificate, ClientConfig, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError,
+    };
+    use std::{io, net::SocketAddr, sync::Arc};
+    use tokio::net::TcpStream;
+    use tokio_rustls::TlsConnector;
+    use tower_service::Service;
+    use tower_util::ServiceExt;
+    use webpki::DNSNameRef;
+
     // Self Signed Certificate
     pub(crate) const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
 MIIDkzCCAnugAwIBAgIUaVoRuh53PqMETXoouyFrcDmZeSkwDQYJKoZIhvcNAQEL
@@ -646,28 +664,6 @@ ZOwXFVl9mCxXHeYG/tnW4TStiro0hP3lwGUKPaFcR3vHbXLoDrmLycMLP13eOCSt
 7t/QgTOtGGRHGOOSqJeDM++kcbvnRY6w6Y4bB7geiUswFvtuZ3TAQJuIOAXr9DCW
 SfyHiEc0jh9LdjUlMvCXaB8=
 -----END PRIVATE KEY-----"#;
-
-    use super::{cert_from_value, pkey_from_value, rustls_config, Handle};
-
-    use crate::server::{
-        bind_rustls, collect_addrs,
-        tests::{empty_request, into_text},
-        Server,
-    };
-
-    use axum::handler::get;
-    use hyper::client::conn::{handshake, SendRequest};
-    use hyper::Body;
-    use rustls::ClientConfig;
-    use rustls::{Certificate, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError};
-    use std::io;
-    use std::net::SocketAddr;
-    use std::sync::Arc;
-    use tokio::net::TcpStream;
-    use tokio_rustls::TlsConnector;
-    use tower_service::Service;
-    use tower_util::ServiceExt;
-    use webpki::DNSNameRef;
 
     struct TestCertVerifier;
 

@@ -1,24 +1,44 @@
-use crate::server::{Accept, Handle, ListenerTask, MakeParts};
-use crate::util::HyperService;
-
-use std::io;
-use std::pin::Pin;
-use std::task::Poll;
-
-use futures_util::future::Ready;
-use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
-
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
-
-use http::uri::Scheme;
-
+use crate::{
+    server::{Accept, Handle, ListenerTask, MakeParts},
+    util::HyperService,
+};
+use futures_util::{
+    future::Ready,
+    stream::{FuturesUnordered, Stream, StreamExt},
+};
+use http::{uri::Scheme, Request};
+use hyper::server::conn::Http;
+use std::{io, pin::Pin, task::Poll};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+    task::JoinHandle,
+};
 use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
 
-use hyper::server::conn::Http;
-use hyper::Request;
+macro_rules! accept {
+    ($conns:expr, $handle:expr, $listener:expr) => {
+        tokio::select! {
+            biased;
+            _ = $handle.shutdown_signal() => break Mode::Shutdown,
+            _ = $handle.graceful_shutdown_signal() => break Mode::Graceful,
+            result = $listener.accept() => result,
+            _ = poll_list(&mut $conns) => unreachable!(),
+        }
+    };
+}
+
+macro_rules! clear_finished {
+    ($conns:expr) => {
+        futures_util::future::poll_fn(|cx| {
+            while let Poll::Ready(_) = Pin::new(&mut $conns).poll_next(cx) {}
+
+            Poll::Ready(())
+        })
+        .await;
+    };
+}
 
 type FutList = FuturesUnordered<JoinHandle<()>>;
 
@@ -45,12 +65,6 @@ where
     fn make_parts(&self) -> (Self::Layer, Self::Acceptor) {
         (self.layer.clone(), self.acceptor.clone())
     }
-}
-
-#[derive(Debug)]
-enum Mode {
-    Shutdown,
-    Graceful,
 }
 
 #[derive(Clone)]
@@ -93,29 +107,6 @@ impl<S, A> HttpServer<S, CloneParts<NoopLayer, A>> {
             CloneParts::new(NoopLayer, acceptor),
         )
     }
-}
-
-macro_rules! accept {
-    ($conns:expr, $handle:expr, $listener:expr) => {
-        tokio::select! {
-            biased;
-            _ = $handle.shutdown_signal() => break Mode::Shutdown,
-            _ = $handle.graceful_shutdown_signal() => break Mode::Graceful,
-            result = $listener.accept() => result,
-            _ = poll_list(&mut $conns) => unreachable!(),
-        }
-    };
-}
-
-macro_rules! clear_finished {
-    ($conns:expr) => {
-        futures_util::future::poll_fn(|cx| {
-            while let Poll::Ready(_) = Pin::new(&mut $conns).poll_next(cx) {}
-
-            Poll::Ready(())
-        })
-        .await;
-    };
 }
 
 impl<S, M> HttpServer<S, M>
@@ -171,20 +162,6 @@ where
     }
 }
 
-async fn poll_list(conns: &mut FutList) {
-    while let Some(_) = conns.next().await {}
-
-    std::future::pending::<()>().await;
-}
-
-fn shutdown_conns(conns: FutList) {
-    conns.iter().for_each(|conn| conn.abort());
-}
-
-async fn wait_conns(conns: &mut FutList) {
-    while let Some(_) = conns.next().await {}
-}
-
 #[derive(Clone)]
 pub(crate) struct NoopAcceptor;
 
@@ -209,4 +186,24 @@ impl<S> Layer<S> for NoopLayer {
     fn layer(&self, layer: S) -> Self::Service {
         layer
     }
+}
+
+#[derive(Debug)]
+enum Mode {
+    Shutdown,
+    Graceful,
+}
+
+async fn poll_list(conns: &mut FutList) {
+    while let Some(_) = conns.next().await {}
+
+    std::future::pending::<()>().await;
+}
+
+fn shutdown_conns(conns: FutList) {
+    conns.iter().for_each(|conn| conn.abort());
+}
+
+async fn wait_conns(conns: &mut FutList) {
+    while let Some(_) = conns.next().await {}
 }

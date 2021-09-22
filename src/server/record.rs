@@ -38,19 +38,21 @@
 //! }
 //! ```
 
-use crate::server::http_server::{HttpServer, NoopAcceptor};
-use crate::server::{Accept, Handle, MakeParts};
-
-use std::io;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
+use crate::server::{
+    http_server::{HttpServer, NoopAcceptor},
+    Accept, Handle, MakeParts,
+};
 use http::uri::Scheme;
-
+use std::{
+    io,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    task::{Context, Poll},
+};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tower_http::add_extension::AddExtension;
 use tower_layer::Layer;
 
@@ -58,12 +60,6 @@ use tower_layer::Layer;
 #[derive(Default, Clone)]
 pub struct Recording {
     inner: Arc<RecordingInner>,
-}
-
-#[derive(Default)]
-struct RecordingInner {
-    sent: AtomicUsize,
-    received: AtomicUsize,
 }
 
 impl Recording {
@@ -80,6 +76,12 @@ impl Recording {
     pub fn bytes_received(&self) -> usize {
         self.inner.received.load(Ordering::Acquire)
     }
+}
+
+#[derive(Default)]
+struct RecordingInner {
+    sent: AtomicUsize,
+    received: AtomicUsize,
 }
 
 #[cfg(feature = "tls-rustls")]
@@ -235,13 +237,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::Recording;
-
-    use crate::server::tests::{empty_request, http_client, into_text};
-    use crate::{Handle, Server};
-
+    use crate::{
+        server::tests::{empty_request, http_client, into_text},
+        Handle, Server,
+    };
     use axum::{extract::Extension, handler::get};
     use tower_service::Service;
     use tower_util::ServiceExt;
+
+    #[cfg(feature = "tls-rustls")]
+    use crate::server::tls::tests::{https_client, CERTIFICATE, PRIVATE_KEY};
 
     #[ignore]
     #[tokio::test]
@@ -272,9 +277,6 @@ mod tests {
             assert_ne!(into_text(resp).await, "0");
         }
     }
-
-    #[cfg(feature = "tls-rustls")]
-    use crate::server::tls::tests::{https_client, CERTIFICATE, PRIVATE_KEY};
 
     #[ignore]
     #[tokio::test]

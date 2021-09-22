@@ -1,19 +1,7 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
 pub(crate) type BoxedIterator = Box<dyn Iterator<Item = SocketAddr>>;
-
 pub(crate) type Boxed = Box<dyn ToSocketAddrs<Iter = BoxedIterator> + Send>;
-
-impl<T> ToSocketAddrsExt for T where T: ToSocketAddrs {}
-
-pub(crate) trait ToSocketAddrsExt: ToSocketAddrs {
-    fn map<F>(self, f: F) -> Map<Self, F>
-    where
-        Self: Sized,
-    {
-        Map { inner: self, f }
-    }
-}
 
 pub(crate) struct Map<T, F> {
     inner: T,
@@ -35,6 +23,17 @@ where
         }
     }
 }
+
+pub(crate) trait ToSocketAddrsExt: ToSocketAddrs {
+    fn map<F>(self, f: F) -> Map<Self, F>
+    where
+        Self: Sized,
+    {
+        Map { inner: self, f }
+    }
+}
+
+impl<T> ToSocketAddrsExt for T where T: ToSocketAddrs {}
 
 #[cfg(test)]
 mod tests {
