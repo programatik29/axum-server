@@ -7,9 +7,9 @@ pub(crate) trait HyperService<Request>
 where
     Self: Service<
             Request,
-            Response = Response<Self::RespBody>,
-            Future = Self::SendFuture,
-            Error = Self::BoxedError,
+            Response = Response<<Self as HyperService<Request>>::RespBody>,
+            Future = <Self as HyperService<Request>>::SendFuture,
+            Error = <Self as HyperService<Request>>::BoxedError,
         >
         + Send
         + Sync
@@ -35,7 +35,9 @@ where
 
 pub(crate) trait SendBody
 where
-    Self: Body<Data = Self::SendData, Error = Self::BoxedError> + Send + 'static,
+    Self: Body<Data = <Self as SendBody>::SendData, Error = <Self as SendBody>::BoxedError>
+        + Send
+        + 'static,
 {
     type SendData: Send;
     type BoxedError: Into<Box<dyn std::error::Error + Send + Sync>>;
