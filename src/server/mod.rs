@@ -459,7 +459,6 @@ pub(crate) mod tests {
         s.parse().unwrap()
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_listening_addrs() {
         let app = get(|| async { "Hello, world!" });
@@ -477,7 +476,6 @@ pub(crate) mod tests {
         assert!(handle.listening_addrs().is_some());
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_with_requests() {
         let app = get(|| async { "Hello, world!" });
@@ -507,7 +505,6 @@ pub(crate) mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_shutdown() {
         let app = get(|| async { "Hello, world!" });
@@ -550,7 +547,6 @@ pub(crate) mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_graceful_shutdown() {
         let app = get(|| async { "Hello, world!" });

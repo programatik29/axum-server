@@ -120,7 +120,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod server;
-pub(crate) mod util;
+mod util;
 
 pub use server::{bind, Handle, Server};
 

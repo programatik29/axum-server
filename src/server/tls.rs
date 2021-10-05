@@ -718,7 +718,6 @@ SfyHiEc0jh9LdjUlMvCXaB8=
         s.parse().unwrap()
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_listening_addrs() {
         let key = PRIVATE_KEY.as_bytes().to_vec();
@@ -741,7 +740,6 @@ SfyHiEc0jh9LdjUlMvCXaB8=
         assert!(handle.listening_addrs().is_some());
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_with_requests() {
         let key = PRIVATE_KEY.as_bytes().to_vec();

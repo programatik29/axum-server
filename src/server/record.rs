@@ -248,7 +248,6 @@ mod tests {
     #[cfg(feature = "tls-rustls")]
     use crate::server::tls::tests::{https_client, CERTIFICATE, PRIVATE_KEY};
 
-    #[ignore]
     #[tokio::test]
     async fn test_record() {
         let app = get(handler);
@@ -278,7 +277,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test]
     #[cfg(feature = "tls-rustls")]
     async fn test_tls_record() {
