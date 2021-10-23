@@ -11,57 +11,6 @@ readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
 version = "0.2.6"
 
-[features]
-record = []
-tls-rustls = ["rustls", "tokio-rustls"]
-
-[dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-http = "0.2"
-http-body = "0.4"
-hyper = { version = "0.14", features = ["runtime", "server", "http1", "http2"] }
-parking_lot = "0.11"
-tokio = { version = "1", features = ["rt", "net", "sync"] }
-tower-layer = "0.3"
-tower-service = "0.3"
-tower-http = { version = "0.1", features = ["add-extension"] }
-
-# optional dependencies
-rustls = { optional = true, version = "0.19" }
-tokio-rustls = { optional = true, version = "0.22" }
-
-[dev-dependencies]
-axum = "0.2"
-hyper = { version = "0.14", features = ["client"] }
-rustls = { version = "0.19", features = ["dangerous_configuration"] }
-rustls-native-certs = "0.5"
-tokio = { version = "1", features = ["full"] }
-tower-util = "0.3"
-webpki = "0.21"
-
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-
-[package.metadata.playground]
-features = ["tls_rustls", "record"]
-
-[[example]]
-name = "tls_rustls"
-required-features = ["tls-rustls"]
-
-[[example]]
-name = "plain_and_tls"
-required-features = ["tls-rustls"]
-
-[[example]]
-name = "uri_scheme"
-required-features = ["tls-rustls"]
-
-[[example]]
-name = "tls_reload"
-required-features = ["tls-rustls"]
-
-[[example]]
-name = "record"
-required-features = ["record"]
