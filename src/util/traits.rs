@@ -12,7 +12,6 @@ where
             Error = Self::BoxedError,
         >
         + Send
-        + Sync
         + 'static
         + Clone,
 {
@@ -23,7 +22,7 @@ where
 
 impl<T, B, Request> HyperService<Request> for T
 where
-    T: Service<Request, Response = Response<B>> + Send + Sync + 'static + Clone,
+    T: Service<Request, Response = Response<B>> + Send + 'static + Clone,
     T::Future: Future<Output = Result<Self::Response, Self::Error>> + Send + 'static,
     T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     B: SendBody,

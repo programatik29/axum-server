@@ -187,7 +187,7 @@ impl TlsServer {
     /// binded addresses will be stopped and then an error will be returned.
     pub async fn serve<S, B>(mut self, service: S) -> io::Result<()>
     where
-        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
+        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + 'static + Clone,
         S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
         S::Future: Send,
         B: Body + Send + 'static,
@@ -222,7 +222,7 @@ impl TlsServer {
     #[cfg_attr(docsrs, doc(cfg(feature = "record")))]
     pub async fn serve_and_record<S, B>(mut self, service: S) -> io::Result<()>
     where
-        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + Sync + 'static + Clone,
+        S: Service<Request<hyper::Body>, Response = Response<B>> + Send + 'static + Clone,
         S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
         S::Future: Send,
         B: Body + Send + 'static,
