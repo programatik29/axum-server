@@ -7,6 +7,8 @@
 
 `axum-server` is a [`hyper`] server implementation designed to be used with [`axum`] framework.
 
+[`axum`] version `0.3` is not supported yet. But will be supported soon.
+
 ## Features
 
 - Conveniently bind to any number of addresses.
