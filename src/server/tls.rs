@@ -64,14 +64,12 @@ use crate::{
 use http::{uri::Scheme, Request, Response};
 use http_body::Body;
 use parking_lot::RwLock;
-use rustls::{
-    internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
-    Certificate, NoClientAuth, PrivateKey, ServerConfig,
-};
+use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::{
     fmt,
     fs::File,
-    io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, Cursor, ErrorKind, Seek},
     net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Arc,
@@ -531,42 +529,44 @@ async fn cert_from_file(path: &Path) -> io::Result<Vec<Certificate>> {
 
 fn load_private_key<R: BufRead + Seek>(reader: &mut R) -> io::Result<PrivateKey> {
     let key = pkcs8_private_keys(reader)
-        .and_then(try_get_first_key)
-        .or_else(|_| {
-            reader.seek(SeekFrom::Start(0)).unwrap();
-            rsa_private_keys(reader).and_then(try_get_first_key)
-        })
         .map_err(|_| io::Error::new(ErrorKind::InvalidData, "invalid private key"))?;
-
-    Ok(key)
+    if !key.is_empty() {
+        return Ok(PrivateKey(key[0].clone()));
+    } else {
+        let key = rsa_private_keys(reader)
+            .map_err(|_| io::Error::new(ErrorKind::InvalidData, "invalid private key"))?;
+        if !key.is_empty() {
+            return Ok(PrivateKey(key[0].clone()));
+        } else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "invalid private key",
+            ));
+        }
+    }
 }
 
 fn load_certificates(reader: &mut dyn BufRead) -> io::Result<Vec<Certificate>> {
-    let certs =
-        certs(reader).map_err(|_| io::Error::new(ErrorKind::InvalidData, "invalid certificate"))?;
+    let certs = certs(reader)
+        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "invalid certificate"))?
+        .iter()
+        .map(|v| Certificate(v.clone()))
+        .collect();
 
     Ok(certs)
-}
-
-fn try_get_first_key(mut keys: Vec<PrivateKey>) -> Result<PrivateKey, ()> {
-    if !keys.is_empty() {
-        Ok(keys.remove(0))
-    } else {
-        Err(())
-    }
 }
 
 fn rustls_config(
     private_key: PrivateKey,
     certificates: Vec<Certificate>,
 ) -> io::Result<Arc<ServerConfig>> {
-    let mut config = ServerConfig::new(NoClientAuth::new());
+    let mut config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(certificates, private_key)
+        .expect("bad certificate/key");
 
-    config
-        .set_single_cert(certificates, private_key)
-        .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
-
-    config.set_protocols(&[b"h2".to_vec(), b"http/1.1".to_vec()]);
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     Ok(Arc::new(config))
 }
@@ -612,14 +612,16 @@ pub(crate) mod tests {
         Body,
     };
     use rustls::{
-        Certificate, ClientConfig, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError,
+        client::ServerCertVerified, client::ServerCertVerifier, Certificate, ClientConfig,
+        Error as TlsError, ServerName,
     };
     use std::{io, net::SocketAddr, sync::Arc};
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
     use tower_service::Service;
     use tower_util::ServiceExt;
-    use webpki::DNSNameRef;
+
+    use std::time::SystemTime;
 
     // Self Signed Certificate
     pub(crate) const CERTIFICATE: &'static str = r#"-----BEGIN CERTIFICATE-----
@@ -680,11 +682,13 @@ SfyHiEc0jh9LdjUlMvCXaB8=
     impl ServerCertVerifier for TestCertVerifier {
         fn verify_server_cert(
             &self,
-            _: &RootCertStore,
-            _: &[Certificate],
-            _: DNSNameRef<'_>,
-            _: &[u8],
-        ) -> Result<ServerCertVerified, TLSError> {
+            _end_entity: &Certificate,
+            _intermediates: &[Certificate],
+            _server_name: &ServerName,
+            _scts: &mut dyn Iterator<Item = &[u8]>,
+            _ocsp_response: &[u8],
+            _now: SystemTime,
+        ) -> Result<ServerCertVerified, TlsError> {
             Ok(ServerCertVerified::assertion())
         }
     }
@@ -775,20 +779,32 @@ SfyHiEc0jh9LdjUlMvCXaB8=
     }
 
     pub(crate) async fn https_client(addr: SocketAddr) -> io::Result<SendRequest<Body>> {
-        let mut config = ClientConfig::new();
+        use rustls::RootCertStore;
+        use std::convert::TryFrom;
 
-        config.root_store = rustls_native_certs::load_native_certs().unwrap();
+        let mut root_store = RootCertStore::empty();
+
+        for cert in rustls_native_certs::load_native_certs()? {
+            root_store.add(&rustls::Certificate(cert.0)).unwrap();
+        }
+
+        let mut config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
         config
             .dangerous()
             .set_certificate_verifier(Arc::new(TestCertVerifier));
+
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let config = Arc::new(config);
         let connector = TlsConnector::from(config);
 
         let stream = TcpStream::connect(addr).await?;
-        let dns = DNSNameRef::try_from_ascii_str("localhost").unwrap();
-        let stream = connector.connect(dns, stream).await?;
+        let dns = ServerName::try_from("localhost").unwrap();
+        let stream = connector.connect(dns.into(), stream).await?;
 
         let (client, conn) = handshake(stream)
             .await

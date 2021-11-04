@@ -421,9 +421,9 @@ pub(crate) fn collect_addrs(
         let mut vec = Vec::new();
 
         for addrs in addrs {
-            let mut iter = addrs.to_socket_addrs()?;
+            let iter = addrs.to_socket_addrs()?;
 
-            while let Some(addr) = iter.next() {
+            for addr in iter {
                 vec.push(addr);
             }
         }

@@ -194,7 +194,7 @@ enum Mode {
 }
 
 async fn poll_list(conns: &mut FutList) {
-    while let Some(_) = conns.next().await {}
+    while conns.next().await.is_some() {}
 
     std::future::pending::<()>().await;
 }
@@ -204,5 +204,5 @@ fn shutdown_conns(conns: FutList) {
 }
 
 async fn wait_conns(conns: &mut FutList) {
-    while let Some(_) = conns.next().await {}
+    while conns.next().await.is_some() {}
 }

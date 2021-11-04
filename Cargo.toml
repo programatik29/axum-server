@@ -13,7 +13,7 @@ version = "0.2.6"
 
 [features]
 record = []
-tls-rustls = ["rustls", "tokio-rustls"]
+tls-rustls = ["rustls", "tokio-rustls", "rustls-pemfile"]
 
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
@@ -27,17 +27,18 @@ tower-service = "0.3"
 tower-http = { version = "0.1", features = ["add-extension"] }
 
 # optional dependencies
-rustls = { optional = true, version = "0.19" }
-tokio-rustls = { optional = true, version = "0.22" }
+rustls = { optional = true, version = "0.20" }
+tokio-rustls = { optional = true, version = "0.23" }
+rustls-pemfile = { optional = true, version = "0.2.1" }
 
 [dev-dependencies]
 axum = "0.2"
 hyper = { version = "0.14", features = ["client"] }
-rustls = { version = "0.19", features = ["dangerous_configuration"] }
-rustls-native-certs = "0.5"
+rustls = { version = "0.20", features = ["dangerous_configuration"] }
+rustls-native-certs = "0.6"
 tokio = { version = "1", features = ["full"] }
 tower-util = "0.3"
-webpki = "0.21"
+webpki = "0.22"
 
 [package.metadata.docs.rs]
 all-features = true
