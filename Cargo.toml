@@ -11,18 +11,22 @@ readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
 version = "0.2.6"
 
+[features]
+default = []
+
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 http = "0.2"
 http-body = "0.4"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "runtime"] }
-tokio = { version = "1", features = ["net", "sync"] }
+tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 
 [dev-dependencies]
 axum = "0.3"
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
 
 [package.metadata.docs.rs]
 all-features = true

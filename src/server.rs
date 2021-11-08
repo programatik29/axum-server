@@ -1,4 +1,4 @@
-use crate::service::MakeServiceRef;
+use crate::{handle::Handle, service::MakeServiceRef};
 use futures_util::future::poll_fn;
 use http::Request;
 use hyper::server::{
@@ -9,9 +9,8 @@ use std::{
     io::{self, ErrorKind},
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, Mutex},
 };
-use tokio::{net::TcpListener, sync::Notify};
+use tokio::net::TcpListener;
 
 /// HTTP server.
 #[derive(Debug)]
@@ -46,34 +45,63 @@ impl Server {
     where
         M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
     {
+        let handle = self.handle;
+
         let listener = TcpListener::bind(self.addr).await?;
         let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
 
-        self.handle.notify_listening(incoming.local_addr());
+        handle.notify_listening(incoming.local_addr());
 
-        loop {
-            let addr_stream = accept(&mut incoming).await?;
+        let accept_loop_future = async {
+            loop {
+                let addr_stream = tokio::select! {
+                    biased;
+                    result = accept(&mut incoming) => result?,
+                    _ = handle.wait_graceful_shutdown() => return Ok(()),
+                };
 
-            poll_fn(|cx| make_service.poll_ready(cx))
-                .await
-                .map_err(io_other)?;
+                poll_fn(|cx| make_service.poll_ready(cx))
+                    .await
+                    .map_err(io_other)?;
 
-            let service = match make_service.make_service(&addr_stream).await {
-                Ok(service) => service,
-                Err(_) => continue,
-            };
+                let service = match make_service.make_service(&addr_stream).await {
+                    Ok(service) => service,
+                    Err(_) => continue,
+                };
 
-            tokio::spawn(async move {
-                let _ = Http::new()
-                    .serve_connection(addr_stream, service)
-                    .with_upgrades()
-                    .await;
-            });
+                let watcher = handle.watcher();
+
+                tokio::spawn(async move {
+                    let serve_future = Http::new()
+                        .serve_connection(addr_stream, service)
+                        .with_upgrades();
+
+                    tokio::select! {
+                        biased;
+                        _ = watcher.wait_shutdown() => (),
+                        _ = serve_future => (),
+                    }
+                });
+            }
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = handle.wait_shutdown() => return Ok(()),
+            result = accept_loop_future => result,
+        };
+
+        if let Err(e) = result {
+            return Err(e);
         }
+
+        handle.wait_connections_end().await;
+
+        Ok(())
     }
 }
 
-async fn accept(incoming: &mut AddrIncoming) -> io::Result<AddrStream> {
+pub(crate) async fn accept(incoming: &mut AddrIncoming) -> io::Result<AddrStream> {
     let mut incoming = Pin::new(incoming);
 
     // Always [`Option::Some`].
@@ -83,61 +111,24 @@ async fn accept(incoming: &mut AddrIncoming) -> io::Result<AddrStream> {
         .unwrap()
 }
 
-/// A handle for [`Server`].
-#[derive(Clone, Debug, Default)]
-pub struct Handle {
-    inner: Arc<HandleInner>,
-}
-
-#[derive(Debug, Default)]
-struct HandleInner {
-    addr: Mutex<Option<SocketAddr>>,
-    addr_notify: Notify,
-}
-
-impl Handle {
-    /// Create a new handle.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns local address and port when server starts listening.
-    pub async fn listening(&self) -> SocketAddr {
-        let notified = self.inner.addr_notify.notified();
-
-        match *self.inner.addr.lock().unwrap() {
-            Some(addr) => return addr,
-            None => (),
-        }
-
-        notified.await;
-
-        self.inner
-            .addr
-            .lock()
-            .unwrap()
-            .expect("notified before address is set")
-    }
-
-    fn notify_listening(&self, addr: SocketAddr) {
-        *self.inner.addr.lock().unwrap() = Some(addr);
-
-        self.inner.addr_notify.notify_waiters();
-    }
-}
-
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
+pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
     io::Error::new(ErrorKind::Other, error)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Handle, Server};
+    use crate::{handle::Handle, server::Server};
     use axum::{routing::get, Router};
-    use hyper::client::Client;
-    use std::net::SocketAddr;
+    use http::Request;
+    use hyper::{
+        client::conn::{handshake, SendRequest},
+        Body,
+    };
+    use std::{net::SocketAddr, time::Duration};
+    use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+    use tower::{Service, ServiceExt};
 
     #[tokio::test]
     async fn start_and_request() {
@@ -153,15 +144,152 @@ mod tests {
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
-                .unwrap();
         });
 
         let addr = handle.listening().await;
 
-        let client = Client::new();
-        let response = client.get(format!("http://{}/", addr).parse().unwrap()).await.unwrap();
+        let (client, _conn) = connect(addr).await;
+        let response = client.oneshot(Request::new(Body::empty())).await.unwrap();
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_shutdown() {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await;
+
+        let (mut client, conn) = connect(addr).await;
+
+        handle.shutdown();
+
+        let response_future_result = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await;
+
+        assert!(response_future_result.is_err());
+
+        // Connection task should finish soon.
+        let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown() {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await;
+
+        let (mut client, conn) = connect(addr).await;
+
+        handle.graceful_shutdown(None);
+
+        let response = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+            .unwrap();
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+
+        // Disconnect client.
+        conn.abort();
+
+        // Server task should finish soon.
+        let server_result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(server_result.is_ok());
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_graceful_shutdown_timed() {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await;
+
+        let (mut client, _conn) = connect(addr).await;
+
+        handle.graceful_shutdown(Some(Duration::from_millis(250)));
+
+        let response = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+            .unwrap();
+        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+
+        // Don't disconnect client.
+        // conn.abort();
+
+        // Server task should finish soon.
+        let server_result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(server_result.is_ok());
+    }
+
+    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+        let stream = TcpStream::connect(addr).await.unwrap();
+
+        let (send_request, connection) = handshake(stream).await.unwrap();
+
+        let task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        (send_request, task)
     }
 }

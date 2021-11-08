@@ -25,7 +25,13 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod handle;
+mod notify_once;
 mod server;
-mod service;
 
-pub use self::server::{bind, Handle, Server};
+pub mod service;
+
+pub use self::{
+    handle::Handle,
+    server::{bind, Server},
+};
