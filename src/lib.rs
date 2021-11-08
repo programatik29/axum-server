@@ -35,3 +35,10 @@ pub use self::{
     handle::Handle,
     server::{bind, Server},
 };
+
+#[cfg(feature = "tls-rustls")]
+pub mod tls_rustls;
+
+#[cfg(feature = "tls-rustls")]
+#[doc(inline)]
+pub use self::tls_rustls::bind_rustls;

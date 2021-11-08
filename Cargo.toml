@@ -13,6 +13,7 @@ version = "0.2.6"
 
 [features]
 default = []
+tls-rustls = ["rustls", "tokio-rustls"]
 
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
@@ -21,6 +22,11 @@ http-body = "0.4"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "runtime"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
+
+# optional dependencies
+rustls = { version = "0.20", features = ["dangerous_configuration"], optional = true }
+rustls-pemfile = "0.2"
+tokio-rustls = { version = "0.23", optional = true }
 
 [dev-dependencies]
 axum = "0.3"
