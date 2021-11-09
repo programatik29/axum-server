@@ -1,8 +1,12 @@
-use crate::{handle::Handle, service::MakeServiceRef};
+use crate::{
+    accept::{Accept, DefaultAcceptor},
+    handle::Handle,
+    service::{MakeServiceRef, SendService},
+};
 use futures_util::future::poll_fn;
 use http::Request;
 use hyper::server::{
-    accept::Accept,
+    accept::Accept as HyperAccept,
     conn::{AddrIncoming, AddrStream, Http},
 };
 use std::{
@@ -10,11 +14,15 @@ use std::{
     net::SocketAddr,
     pin::Pin,
 };
-use tokio::net::TcpListener;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+};
 
 /// HTTP server.
 #[derive(Debug)]
-pub struct Server {
+pub struct Server<A = DefaultAcceptor> {
+    acceptor: A,
     addr: SocketAddr,
     handle: Handle,
 }
@@ -27,9 +35,25 @@ pub fn bind(addr: SocketAddr) -> Server {
 impl Server {
     /// Create a server that will bind to provided address.
     pub fn bind(addr: SocketAddr) -> Self {
+        let acceptor = DefaultAcceptor::new();
         let handle = Handle::new();
 
-        Self { addr, handle }
+        Self {
+            acceptor,
+            addr,
+            handle,
+        }
+    }
+}
+
+impl<A> Server<A> {
+    /// Overwrite acceptor.
+    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> Server<Acceptor> {
+        Server {
+            acceptor,
+            addr: self.addr,
+            handle: self.handle,
+        }
     }
 
     /// Provide a handle for additional utilities.
@@ -44,7 +68,12 @@ impl Server {
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
         M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
+        A: Accept<AddrStream, M::Service> + Clone + Send + Sync + 'static,
+        A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+        A::Service: SendService<Request<hyper::Body>> + Send,
+        A::Future: Send,
     {
+        let acceptor = self.acceptor;
         let handle = self.handle;
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -69,17 +98,23 @@ impl Server {
                     Err(_) => continue,
                 };
 
+                let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
 
                 tokio::spawn(async move {
-                    let serve_future = Http::new()
-                        .serve_connection(addr_stream, service)
-                        .with_upgrades();
+                    if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
+                    {
+                        let service = send_service.into_service();
 
-                    tokio::select! {
-                        biased;
-                        _ = watcher.wait_shutdown() => (),
-                        _ = serve_future => (),
+                        let serve_future = Http::new()
+                            .serve_connection(stream, service)
+                            .with_upgrades();
+
+                        tokio::select! {
+                            biased;
+                            _ = watcher.wait_shutdown() => (),
+                            _ = serve_future => (),
+                        }
                     }
                 });
             }

@@ -29,6 +29,7 @@ mod handle;
 mod notify_once;
 mod server;
 
+pub mod accept;
 pub mod service;
 
 pub use self::{
@@ -40,5 +41,4 @@ pub use self::{
 pub mod tls_rustls;
 
 #[cfg(feature = "tls-rustls")]
-#[doc(inline)]
-pub use self::tls_rustls::bind_rustls;
+pub use self::tls_rustls::export::bind_rustls;

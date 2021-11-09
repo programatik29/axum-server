@@ -1,135 +1,109 @@
 //! Tls implementation using [`rustls`]
 
 use crate::{
-    handle::Handle,
-    server::{accept, io_other},
-    service::MakeServiceRef,
+    accept::{Accept, DefaultAcceptor},
+    server::{io_other, Server},
 };
-use futures_util::future::poll_fn;
-use http::Request;
-use hyper::server::conn::{AddrIncoming, AddrStream, Http};
+use http::uri::Scheme;
 use rustls::{Certificate, PrivateKey, ServerConfig};
-use std::{
-    fmt, io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
+use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    task::spawn_blocking,
 };
-use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{server::TlsStream, TlsAcceptor};
+use tower_http::add_extension::AddExtension;
 
-/// HTTPS server using rustls.
-#[derive(Debug)]
-pub struct RustlsServer {
-    addr: SocketAddr,
-    handle: Handle,
+use futures_util::future::BoxFuture;
+
+pub(crate) mod export {
+    use super::*;
+
+    /// Create a tls server that will bind to provided address.
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
+        super::bind_rustls(addr, config)
+    }
+}
+
+/// Create a tls server that will bind to provided address.
+pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
+    let acceptor = RustlsAcceptor::new(config);
+
+    Server::bind(addr).acceptor(acceptor)
+}
+
+/// Tls acceptor using rustls.
+#[derive(Clone)]
+pub struct RustlsAcceptor<A = DefaultAcceptor> {
+    inner: A,
     config: RustlsConfig,
 }
 
-/// Create a [`RustlsServer`] that will bind to provided address.
-#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> RustlsServer {
-    RustlsServer::bind(addr, config)
-}
-
-impl RustlsServer {
-    /// Create a server that will bind to provided address.
-    pub fn bind(addr: SocketAddr, config: RustlsConfig) -> Self {
-        let handle = Handle::new();
+impl RustlsAcceptor {
+    /// Create a new rustls acceptor.
+    pub fn new(config: RustlsConfig) -> Self {
+        let inner = DefaultAcceptor::new();
 
         Self {
-            addr,
-            handle,
+            inner,
             config,
         }
     }
+}
 
-    /// Provide a handle for additional utilities.
-    pub fn handle(mut self, handle: Handle) -> Self {
-        self.handle = handle;
-        self
-    }
-
-    /// Serve provided [`MakeService`].
-    ///
-    /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
-    pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
-    where
-        M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
-    {
-        let handle = self.handle;
-        let acceptor = tls_acceptor_from_config(self.config).await?;
-
-        let listener = TcpListener::bind(self.addr).await?;
-        let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
-
-        handle.notify_listening(incoming.local_addr());
-
-        let accept_loop_future = async {
-            loop {
-                let addr_stream = tokio::select! {
-                    biased;
-                    result = accept(&mut incoming) => result?,
-                    _ = handle.wait_graceful_shutdown() => return Ok(()),
-                };
-
-                poll_fn(|cx| make_service.poll_ready(cx))
-                    .await
-                    .map_err(io_other)?;
-
-                let service = match make_service.make_service(&addr_stream).await {
-                    Ok(service) => service,
-                    Err(_) => continue,
-                };
-
-                let acceptor = acceptor.clone();
-                let watcher = handle.watcher();
-
-                tokio::spawn(async move {
-                    if let Ok(stream) = acceptor.accept(addr_stream).await {
-                        let serve_future = Http::new()
-                            .serve_connection(stream, service)
-                            .with_upgrades();
-
-                        tokio::select! {
-                            biased;
-                            _ = watcher.wait_shutdown() => (),
-                            _ = serve_future => (),
-                        }
-                    }
-                });
-            }
-        };
-
-        let result = tokio::select! {
-            biased;
-            _ = handle.wait_shutdown() => return Ok(()),
-            result = accept_loop_future => result,
-        };
-
-        if let Err(e) = result {
-            return Err(e);
+impl<A> RustlsAcceptor<A> {
+    /// Overwrite inner acceptor.
+    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> RustlsAcceptor<Acceptor> {
+        RustlsAcceptor {
+            inner: acceptor,
+            config: self.config,
         }
+    }
+}
 
-        handle.wait_connections_end().await;
+impl<A, I, S> Accept<I, S> for RustlsAcceptor<A>
+where
+    A: Accept<I, S>,
+    A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+    A::Service: Send,
+    A::Future: Send + 'static,
+{
+    type Stream = TlsStream<A::Stream>;
+    type Service = AddExtension<A::Service, Scheme>;
+    type Future = BoxFuture<'static, io::Result<(Self::Stream, Self::Service)>>;
 
-        Ok(())
+    fn accept(&self, stream: I, service: S) -> Self::Future {
+        let inner_future = self.inner.accept(stream, service);
+        let config = self.config.clone();
+
+        Box::pin(async move {
+            let (stream, service) = inner_future.await?;
+
+            let stream = TlsAcceptor::from(config.inner).accept(stream).await?;
+            let service = AddExtension::new(service, Scheme::HTTPS);
+
+            Ok((stream, service))
+        })
+    }
+}
+
+impl<A> fmt::Debug for RustlsAcceptor<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RustlsAcceptor").finish()
     }
 }
 
 /// Rustls configuration.
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct RustlsConfig {
-    inner: ConfigType,
+    inner: Arc<ServerConfig>,
 }
 
 impl RustlsConfig {
-    /// Create config from [`ServerConfig`].
-    ///
-    /// Sets alpn protocols.
-    pub fn from_config(config: ServerConfig) -> Self {
-        let config = Config(config);
-        let inner = ConfigType::Rustls { config };
+    /// Create config from `Arc<`[`ServerConfig`]`>`.
+    pub fn from_config(config: Arc<ServerConfig>) -> Self {
+        let inner = config;
 
         Self { inner }
     }
@@ -139,62 +113,54 @@ impl RustlsConfig {
     /// The certificate must be DER-encoded X.509.
     ///
     /// The private key must be DER-encoded ASN.1 in either PKCS#8 or PKCS#1 format.
-    pub fn from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> Self {
-        let inner = ConfigType::Der { cert, key };
+    pub async fn from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<Self> {
+        let server_config = spawn_blocking(|| config_from_der(cert, key))
+            .await
+            .unwrap()?;
+        let inner = Arc::new(server_config);
 
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// Create config from PEM formatted data.
     ///
     /// Certificate and private key must be in PEM format.
-    pub fn from_pem(cert: Vec<u8>, key: Vec<u8>) -> Self {
-        let inner = ConfigType::Pem { cert, key };
+    pub async fn from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<Self> {
+        let server_config = spawn_blocking(|| config_from_pem(cert, key))
+            .await
+            .unwrap()?;
+        let inner = Arc::new(server_config);
 
-        Self { inner }
+        Ok(Self { inner })
     }
 
     /// Create config from PEM formatted files.
     ///
     /// Contents of certificate file and private key file must be in PEM format.
-    pub fn from_pem_file(cert: impl AsRef<Path>, key: impl AsRef<Path>) -> Self {
-        let (cert, key) = (cert.as_ref().to_owned(), key.as_ref().to_owned());
-        let inner = ConfigType::PemFile { cert, key };
+    pub async fn from_pem_file(cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<Self> {
+        let inner = Arc::new(config_from_pem_file(cert, key).await?);
 
-        Self { inner }
+        Ok(Self { inner })
     }
 }
 
-#[derive(Debug)]
-enum ConfigType {
-    Rustls { config: Config },
-    Der { cert: Vec<Vec<u8>>, key: Vec<u8> },
-    Pem { cert: Vec<u8>, key: Vec<u8> },
-    PemFile { cert: PathBuf, key: PathBuf },
-}
-
-async fn tls_acceptor_from_config(config: RustlsConfig) -> io::Result<TlsAcceptor> {
-    let mut server_config = match config.inner {
-        ConfigType::Rustls { config } => config.0,
-        ConfigType::Der { cert, key } => config_from_der(cert, key)?,
-        ConfigType::Pem { cert, key } => config_from_pem(cert, key)?,
-        ConfigType::PemFile { cert, key } => config_from_pemfile(cert, key).await?,
-    };
-
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    Ok(TlsAcceptor::from(Arc::new(server_config)))
+impl fmt::Debug for RustlsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RustlsConfig").finish()
+    }
 }
 
 fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig> {
     let cert = cert.into_iter().map(Certificate).collect();
     let key = PrivateKey(key);
 
-    let config = ServerConfig::builder()
+    let mut config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert, key)
         .map_err(io_other)?;
+
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     Ok(config)
 }
@@ -211,26 +177,21 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
     config_from_der(cert, key)
 }
 
-async fn config_from_pemfile(cert: PathBuf, key: PathBuf) -> io::Result<ServerConfig> {
-    let cert = tokio::fs::read(cert).await?;
-    let key = tokio::fs::read(key).await?;
+async fn config_from_pem_file(
+    cert: impl AsRef<Path>,
+    key: impl AsRef<Path>,
+) -> io::Result<ServerConfig> {
+    let cert = tokio::fs::read(cert.as_ref()).await?;
+    let key = tokio::fs::read(key.as_ref()).await?;
 
     config_from_pem(cert, key)
-}
-
-struct Config(ServerConfig);
-
-impl fmt::Debug for Config {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServerConfig").finish()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
         handle::Handle,
-        tls_rustls::{RustlsConfig, RustlsServer},
+        tls_rustls::{self, RustlsConfig},
     };
     use axum::{routing::get, Router};
     use http::Request;
@@ -263,11 +224,12 @@ mod tests {
             let config = RustlsConfig::from_pem_file(
                 "examples/self-signed-certs/cert.pem",
                 "examples/self-signed-certs/key.pem",
-            );
+            )
+            .await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
-            RustlsServer::bind(addr, config)
+            tls_rustls::bind_rustls(addr, config)
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
@@ -294,11 +256,12 @@ mod tests {
             let config = RustlsConfig::from_pem_file(
                 "examples/self-signed-certs/cert.pem",
                 "examples/self-signed-certs/key.pem",
-            );
+            )
+            .await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
-            RustlsServer::bind(addr, config)
+            tls_rustls::bind_rustls(addr, config)
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
@@ -334,11 +297,12 @@ mod tests {
             let config = RustlsConfig::from_pem_file(
                 "examples/self-signed-certs/cert.pem",
                 "examples/self-signed-certs/key.pem",
-            );
+            )
+            .await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
-            RustlsServer::bind(addr, config)
+            tls_rustls::bind_rustls(addr, config)
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
@@ -385,11 +349,12 @@ mod tests {
             let config = RustlsConfig::from_pem_file(
                 "examples/self-signed-certs/cert.pem",
                 "examples/self-signed-certs/key.pem",
-            );
+            )
+            .await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
-            RustlsServer::bind(addr, config)
+            tls_rustls::bind_rustls(addr, config)
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
