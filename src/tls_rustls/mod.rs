@@ -177,7 +177,11 @@ impl RustlsConfig {
     /// Reload config from PEM formatted files.
     ///
     /// Contents of certificate file and private key file must be in PEM format.
-    pub async fn reload_from_pem_file(&self, cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<()> {
+    pub async fn reload_from_pem_file(
+        &self,
+        cert: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+    ) -> io::Result<()> {
         let server_config = config_from_pem_file(cert, key).await?;
         let inner = Arc::new(server_config);
 
@@ -267,6 +271,62 @@ mod tests {
         let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_reload() {
+        let handle = Handle::new();
+
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        let server_handle = handle.clone();
+        let rustls_config = config.clone();
+        tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            tls_rustls::bind_rustls(addr, rustls_config)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await;
+
+        let cert_a = get_first_cert(addr).await;
+        let mut cert_b = get_first_cert(addr).await;
+
+        assert_eq!(cert_a, cert_b);
+
+        config
+            .reload_from_pem_file(
+                "examples/self-signed-certs/reload/cert.pem",
+                "examples/self-signed-certs/reload/key.pem",
+            )
+            .await
+            .unwrap();
+
+        cert_b = get_first_cert(addr).await;
+
+        assert_ne!(cert_a, cert_b);
+
+        config
+            .reload_from_pem_file(
+                "examples/self-signed-certs/cert.pem",
+                "examples/self-signed-certs/key.pem",
+            )
+            .await
+            .unwrap();
+
+        cert_b = get_first_cert(addr).await;
+
+        assert_eq!(cert_a, cert_b);
     }
 
     #[tokio::test]
@@ -363,6 +423,15 @@ mod tests {
         let addr = handle.listening().await;
 
         (handle, server_task, addr)
+    }
+
+    async fn get_first_cert(addr: SocketAddr) -> Certificate {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let tls_stream = tls_connector().connect(dns_name(), stream).await.unwrap();
+
+        let (_io, client_connection) = tls_stream.into_inner();
+
+        client_connection.peer_certificates().unwrap()[0].clone()
     }
 
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
