@@ -5,7 +5,38 @@
 
 # axum-server
 
-`axum-server` is a [`hyper`] server implementation designed to be used with [`axum`] framework.
+axum-server is a [hyper] server implementation designed to be used with [axum] framework.
+
+## Features
+
+- HTTP/1 and HTTP/2
+- HTTPS through [rustls].
+- High performance through [hyper].
+- Using [tower] make service API.
+- Very good [axum] compatibility. Likely to work with future [axum] releases.
+
+## Usage Example
+
+A simple hello world application can be served like:
+
+```rust
+use axum::{routing::get, Router};
+use std::net::SocketAddr;
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    println!("listening on {}", addr);
+    axum_server::bind(addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+}
+```
+
+You can find more examples [here](/examples).
 
 ## Safety
 
@@ -15,6 +46,7 @@ This crate uses `#![forbid(unsafe_code)]` to ensure everything is implemented in
 
 This project is licensed under the [MIT license](LICENSE).
 
-[`hyper`]: https://github.com/hyperium/hyper
-[`axum`]: https://github.com/tokio-rs/axum
-[`rustls`]: https://github.com/rustls/rustls
+[axum]: https://crates.io/crates/axum
+[hyper]: https://crates.io/crates/hyper
+[rustls]: https://crates.io/crates/rustls
+[tower]: https://crates.io/crates/tower
