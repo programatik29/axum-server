@@ -38,7 +38,9 @@ pub use self::{
 };
 
 #[cfg(feature = "tls-rustls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub mod tls_rustls;
 
+#[doc(inline)]
 #[cfg(feature = "tls-rustls")]
 pub use self::tls_rustls::export::bind_rustls;
