@@ -40,3 +40,15 @@ tower = { version = "0.4", features = ["util"] }
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "http_and_https"
+required-features = ["tls-rustls"]
+
+[[example]]
+name = "rustls_reload"
+required-features = ["tls-rustls"]
+
+[[example]]
+name = "rustls_server"
+required-features = ["tls-rustls"]
