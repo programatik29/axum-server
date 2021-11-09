@@ -1,5 +1,6 @@
 //! Tls implementation using [`rustls`]
 
+use self::future::RustlsAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     server::{io_other, Server},
@@ -11,10 +12,8 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     task::spawn_blocking,
 };
-use tokio_rustls::{server::TlsStream, TlsAcceptor};
+use tokio_rustls::server::TlsStream;
 use tower_http::add_extension::AddExtension;
-
-use futures_util::future::BoxFuture;
 
 pub(crate) mod export {
     use super::*;
@@ -25,6 +24,8 @@ pub(crate) mod export {
         super::bind_rustls(addr, config)
     }
 }
+
+pub mod future;
 
 /// Create a tls server that will bind to provided address.
 pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
@@ -68,20 +69,13 @@ where
 {
     type Stream = TlsStream<A::Stream>;
     type Service = AddExtension<A::Service, Scheme>;
-    type Future = BoxFuture<'static, io::Result<(Self::Stream, Self::Service)>>;
+    type Future = RustlsAcceptorFuture<A::Future, A::Stream, A::Service>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
         let inner_future = self.inner.accept(stream, service);
         let config = self.config.clone();
 
-        Box::pin(async move {
-            let (stream, service) = inner_future.await?;
-
-            let stream = TlsAcceptor::from(config.inner).accept(stream).await?;
-            let service = AddExtension::new(service, Scheme::HTTPS);
-
-            Ok((stream, service))
-        })
+        RustlsAcceptorFuture::new(inner_future, config)
     }
 }
 
