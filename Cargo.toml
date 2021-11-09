@@ -16,6 +16,7 @@ default = []
 tls-rustls = ["rustls", "tokio-rustls"]
 
 [dependencies]
+bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 http = "0.2"
 http-body = "0.4"

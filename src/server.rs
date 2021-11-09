@@ -156,57 +156,30 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 mod tests {
     use crate::{handle::Handle, server::Server};
     use axum::{routing::get, Router};
-    use http::Request;
+    use bytes::Bytes;
+    use http::{response, Request};
     use hyper::{
         client::conn::{handshake, SendRequest},
         Body,
     };
-    use std::{net::SocketAddr, time::Duration};
+    use std::{io, net::SocketAddr, time::Duration};
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tower::{Service, ServiceExt};
 
     #[tokio::test]
     async fn start_and_request() {
-        let handle = Handle::new();
+        let (_handle, _server_task, addr) = start_server().await;
 
-        let server_handle = handle.clone();
-        tokio::spawn(async move {
-            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+        let (mut client, _conn) = connect(addr).await;
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-
-            Server::bind(addr)
-                .handle(server_handle)
-                .serve(app.into_make_service())
-                .await
-        });
-
-        let addr = handle.listening().await;
-
-        let (client, _conn) = connect(addr).await;
-        let response = client.oneshot(Request::new(Body::empty())).await.unwrap();
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
     }
 
     #[tokio::test]
     async fn test_shutdown() {
-        let handle = Handle::new();
-
-        let server_handle = handle.clone();
-        tokio::spawn(async move {
-            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
-
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-
-            Server::bind(addr)
-                .handle(server_handle)
-                .serve(app.into_make_service())
-                .await
-        });
-
-        let addr = handle.listening().await;
+        let (handle, _server_task, addr) = start_server().await;
 
         let (mut client, conn) = connect(addr).await;
 
@@ -227,34 +200,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_graceful_shutdown() {
-        let handle = Handle::new();
-
-        let server_handle = handle.clone();
-        let server_task = tokio::spawn(async move {
-            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
-
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-
-            Server::bind(addr)
-                .handle(server_handle)
-                .serve(app.into_make_service())
-                .await
-        });
-
-        let addr = handle.listening().await;
+        let (handle, server_task, addr) = start_server().await;
 
         let (mut client, conn) = connect(addr).await;
 
         handle.graceful_shutdown(None);
 
-        let response = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
-            .await
-            .unwrap();
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
 
@@ -273,6 +225,29 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_graceful_shutdown_timed() {
+        let (handle, server_task, addr) = start_server().await;
+
+        let (mut client, _conn) = connect(addr).await;
+
+        handle.graceful_shutdown(Some(Duration::from_millis(250)));
+
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+
+        // Don't disconnect client.
+        // conn.abort();
+
+        // Server task should finish soon.
+        let server_result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(server_result.is_ok());
+    }
+
+    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
@@ -289,31 +264,7 @@ mod tests {
 
         let addr = handle.listening().await;
 
-        let (mut client, _conn) = connect(addr).await;
-
-        handle.graceful_shutdown(Some(Duration::from_millis(250)));
-
-        let response = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
-            .await
-            .unwrap();
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-
-        assert_eq!(body.as_ref(), b"Hello, world!");
-
-        // Don't disconnect client.
-        // conn.abort();
-
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(server_result.is_ok());
+        (handle, server_task, addr)
     }
 
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
@@ -326,5 +277,19 @@ mod tests {
         });
 
         (send_request, task)
+    }
+
+    async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
+        let (parts, body) = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+            .unwrap()
+            .into_parts();
+        let body = hyper::body::to_bytes(body).await.unwrap();
+
+        (parts, body)
     }
 }
