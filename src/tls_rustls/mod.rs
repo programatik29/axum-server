@@ -6,7 +6,6 @@ use crate::{
     server::{io_other, Server},
 };
 use arc_swap::ArcSwap;
-use http::uri::Scheme;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
 use tokio::{
@@ -14,7 +13,6 @@ use tokio::{
     task::spawn_blocking,
 };
 use tokio_rustls::server::TlsStream;
-use tower_http::add_extension::AddExtension;
 
 pub(crate) mod export {
     use super::*;
@@ -67,7 +65,7 @@ where
     A::Stream: AsyncRead + AsyncWrite + Unpin,
 {
     type Stream = TlsStream<A::Stream>;
-    type Service = AddExtension<A::Service, Scheme>;
+    type Service = A::Service;
     type Future = RustlsAcceptorFuture<A::Future, A::Stream, A::Service>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {

@@ -22,7 +22,6 @@ http = "0.2"
 http-body = "0.4"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "runtime"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
-tower-http = { version = "0.1", features = ["add-extension"] }
 tower-service = "0.3"
 
 # optional dependencies

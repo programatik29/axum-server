@@ -1,7 +1,6 @@
 //! Future types.
 
 use crate::tls_rustls::RustlsConfig;
-use http::uri::Scheme;
 use pin_project_lite::pin_project;
 use std::{
     fmt,
@@ -12,7 +11,6 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::{server::TlsStream, Accept, TlsAcceptor};
-use tower_http::add_extension::AddExtension;
 
 pin_project! {
     /// Future type for [`RustlsAcceptor`](crate::tls_rustls::RustlsAcceptor).
@@ -58,7 +56,7 @@ where
     F: Future<Output = io::Result<(I, S)>>,
     I: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = io::Result<(TlsStream<I>, AddExtension<S, Scheme>)>;
+    type Output = io::Result<(TlsStream<I>, S)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -87,7 +85,6 @@ where
                 AcceptFutureProj::Accept { future, service } => match future.poll(cx) {
                     Poll::Ready(Ok(stream)) => {
                         let service = service.take().expect("future polled after ready");
-                        let service = AddExtension::new(service, Scheme::HTTPS);
 
                         return Poll::Ready(Ok((stream, service)));
                     }
