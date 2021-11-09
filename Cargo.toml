@@ -13,7 +13,7 @@ version = "0.2.6"
 
 [features]
 default = []
-tls-rustls = ["pin-project-lite", "rustls", "rustls-pemfile", "tokio-rustls"]
+tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio-rustls"]
 
 [dependencies]
 bytes = "1"
@@ -26,6 +26,7 @@ tower-http = { version = "0.1", features = ["add-extension"] }
 tower-service = "0.3"
 
 # optional dependencies
+arc-swap = { version = "1", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 rustls = { version = "0.20", features = ["dangerous_configuration"], optional = true }
 rustls-pemfile = { version = "0.2", optional = true }

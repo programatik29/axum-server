@@ -5,6 +5,7 @@ use crate::{
     accept::{Accept, DefaultAcceptor},
     server::{io_other, Server},
 };
+use arc_swap::ArcSwap;
 use http::uri::Scheme;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
@@ -63,9 +64,7 @@ impl<A> RustlsAcceptor<A> {
 impl<A, I, S> Accept<I, S> for RustlsAcceptor<A>
 where
     A: Accept<I, S>,
-    A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-    A::Service: Send,
-    A::Future: Send + 'static,
+    A::Stream: AsyncRead + AsyncWrite + Unpin,
 {
     type Stream = TlsStream<A::Stream>;
     type Service = AddExtension<A::Service, Scheme>;
@@ -88,13 +87,13 @@ impl<A> fmt::Debug for RustlsAcceptor<A> {
 /// Rustls configuration.
 #[derive(Clone)]
 pub struct RustlsConfig {
-    inner: Arc<ServerConfig>,
+    inner: Arc<ArcSwap<ServerConfig>>,
 }
 
 impl RustlsConfig {
     /// Create config from `Arc<`[`ServerConfig`]`>`.
     pub fn from_config(config: Arc<ServerConfig>) -> Self {
-        let inner = config;
+        let inner = Arc::new(ArcSwap::new(config));
 
         Self { inner }
     }
@@ -108,7 +107,7 @@ impl RustlsConfig {
         let server_config = spawn_blocking(|| config_from_der(cert, key))
             .await
             .unwrap()?;
-        let inner = Arc::new(server_config);
+        let inner = Arc::new(ArcSwap::from_pointee(server_config));
 
         Ok(Self { inner })
     }
@@ -120,7 +119,7 @@ impl RustlsConfig {
         let server_config = spawn_blocking(|| config_from_pem(cert, key))
             .await
             .unwrap()?;
-        let inner = Arc::new(server_config);
+        let inner = Arc::new(ArcSwap::from_pointee(server_config));
 
         Ok(Self { inner })
     }
@@ -129,9 +128,62 @@ impl RustlsConfig {
     ///
     /// Contents of certificate file and private key file must be in PEM format.
     pub async fn from_pem_file(cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<Self> {
-        let inner = Arc::new(config_from_pem_file(cert, key).await?);
+        let server_config = config_from_pem_file(cert, key).await?;
+        let inner = Arc::new(ArcSwap::from_pointee(server_config));
 
         Ok(Self { inner })
+    }
+
+    /// Get  inner `Arc<`[`ServerConfig`]`>`.
+    pub fn get_inner(&self) -> Arc<ServerConfig> {
+        self.inner.load_full()
+    }
+
+    /// Reload config from `Arc<`[`ServerConfig`]`>`.
+    pub fn reload_from_config(&self, config: Arc<ServerConfig>) {
+        self.inner.store(config);
+    }
+
+    /// Reload config from DER-encoded data.
+    ///
+    /// The certificate must be DER-encoded X.509.
+    ///
+    /// The private key must be DER-encoded ASN.1 in either PKCS#8 or PKCS#1 format.
+    pub async fn reload_from_der(&self, cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<()> {
+        let server_config = spawn_blocking(|| config_from_der(cert, key))
+            .await
+            .unwrap()?;
+        let inner = Arc::new(server_config);
+
+        self.inner.store(inner);
+
+        Ok(())
+    }
+
+    /// Reload config from PEM formatted data.
+    ///
+    /// Certificate and private key must be in PEM format.
+    pub async fn reload_from_pem(&self, cert: Vec<u8>, key: Vec<u8>) -> io::Result<()> {
+        let server_config = spawn_blocking(|| config_from_pem(cert, key))
+            .await
+            .unwrap()?;
+        let inner = Arc::new(server_config);
+
+        self.inner.store(inner);
+
+        Ok(())
+    }
+
+    /// Reload config from PEM formatted files.
+    ///
+    /// Contents of certificate file and private key file must be in PEM format.
+    pub async fn reload_from_pem_file(&self, cert: impl AsRef<Path>, key: impl AsRef<Path>) -> io::Result<()> {
+        let server_config = config_from_pem_file(cert, key).await?;
+        let inner = Arc::new(server_config);
+
+        self.inner.store(inner);
+
+        Ok(())
     }
 }
 

@@ -65,20 +65,25 @@ where
 
         loop {
             match this.inner.as_mut().project() {
-                AcceptFutureProj::Inner { future } => match future.poll(cx) {
-                    Poll::Ready(Ok((stream, service))) => {
-                        let acceptor = TlsAcceptor::from(
-                            this.config.take().expect("config is not set. this is a bug in axum-server, please report").inner,
-                        );
-                        let future = acceptor.accept(stream);
+                AcceptFutureProj::Inner { future } => {
+                    match future.poll(cx) {
+                        Poll::Ready(Ok((stream, service))) => {
+                            let server_config = this.config
+                                .take()
+                                .expect("config is not set. this is a bug in axum-server, please report")
+                                .get_inner();
 
-                        let service = Some(service);
+                            let acceptor = TlsAcceptor::from(server_config);
+                            let future = acceptor.accept(stream);
 
-                        this.inner.set(AcceptFuture::Accept { future, service });
+                            let service = Some(service);
+
+                            this.inner.set(AcceptFuture::Accept { future, service });
+                        }
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Pending => return Poll::Pending,
                     }
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                    Poll::Pending => return Poll::Pending,
-                },
+                }
                 AcceptFutureProj::Accept { future, service } => match future.poll(cx) {
                     Poll::Ready(Ok(stream)) => {
                         let service = service.take().expect("future polled after ready");
