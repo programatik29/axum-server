@@ -38,6 +38,10 @@ async fn main() {
 
 You can find more examples [here](/examples).
 
+## Minimum Supported Rust Version
+
+axum-server's MSRV is `1.49`.
+
 ## Safety
 
 This crate uses `#![forbid(unsafe_code)]` to ensure everything is implemented in 100% safe Rust.
