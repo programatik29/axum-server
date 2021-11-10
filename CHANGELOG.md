@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.3.1 (10. November 2021)
+
+- **fixed:** `tls-rustls` feature doesn't compile if `fs` feature in `tokio` is
+  not enabled.
+
 # 0.3.0 (10. November 2021)
 
 - **Total rewrite of source code.**
