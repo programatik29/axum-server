@@ -56,7 +56,7 @@
 //! [bind_rustls]: crate::bind_rustls
 //! [created]: https://docs.rs/axum/0.3/axum/struct.Router.html#method.into_make_service
 //! [hyper]: https://crates.io/crates/hyper
-//! [repository]: https://github.com/programatik29/axum-server/tree/master/examples
+//! [repository]: https://github.com/programatik29/axum-server/tree/v0.3.0/examples
 //! [rustls]: https://crates.io/crates/rustls
 //! [tower]: https://crates.io/crates/tower
 //! [`axum`]: https://docs.rs/axum/0.3
