@@ -9,7 +9,7 @@ license = "MIT"
 name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
-version = "0.2.6"
+version = "0.3.0"
 
 [features]
 default = []
@@ -39,6 +39,7 @@ tower = { version = "0.4", features = ["util"] }
 
 [package.metadata.docs.rs]
 all-features = true
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples=examples"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
