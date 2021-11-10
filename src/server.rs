@@ -64,6 +64,15 @@ impl<A> Server<A> {
 
     /// Serve provided [`MakeService`].
     ///
+    /// # Errors
+    ///
+    /// An error will be returned when:
+    ///
+    /// - Binding to an address fails.
+    /// - `make_service` returns an error when `poll_ready` is called. This never happens on
+    /// [`axum`] make services.
+    ///
+    /// [`axum`]: https://docs.rs/axum/0.3
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
