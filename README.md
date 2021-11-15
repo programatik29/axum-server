@@ -7,6 +7,8 @@
 
 axum-server is a [hyper] server implementation designed to be used with [axum] framework.
 
+This project is maintained by community independently from [axum].
+
 ## Features
 
 - HTTP/1 and HTTP/2
