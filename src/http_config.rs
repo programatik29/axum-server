@@ -5,18 +5,12 @@ use hyper::server::conn::Http;
 /// A configuration for [`Http`].
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
-    inner: Http,
+    pub(crate) inner: Http,
 }
 
 impl Default for HttpConfig {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl From<HttpConfig> for Http {
-    fn from(conf: HttpConfig) -> Self {
-        conf.inner
     }
 }
 

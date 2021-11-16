@@ -1,9 +1,14 @@
-use crate::{HttpConfig, accept::{Accept, DefaultAcceptor}, handle::Handle, service::{MakeServiceRef, SendService}};
+use crate::{
+    accept::{Accept, DefaultAcceptor},
+    handle::Handle,
+    service::{MakeServiceRef, SendService},
+    HttpConfig,
+};
 use futures_util::future::poll_fn;
 use http::Request;
 use hyper::server::{
     accept::Accept as HyperAccept,
-    conn::{AddrIncoming, AddrStream, Http},
+    conn::{AddrIncoming, AddrStream},
 };
 use std::{
     io::{self, ErrorKind},
@@ -122,7 +127,8 @@ impl<A> Server<A> {
                     {
                         let service = send_service.into_service();
 
-                        let serve_future = Http::from(http_conf)
+                        let serve_future = http_conf
+                            .inner
                             .serve_connection(stream, service)
                             .with_upgrades();
 
