@@ -90,6 +90,7 @@
 mod handle;
 mod notify_once;
 mod server;
+mod http_config;
 
 pub mod accept;
 pub mod service;
@@ -97,6 +98,7 @@ pub mod service;
 pub use self::{
     handle::Handle,
     server::{bind, Server},
+    http_config::HttpConfig,
 };
 
 #[cfg(feature = "tls-rustls")]
