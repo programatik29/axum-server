@@ -1,8 +1,8 @@
 use crate::{
     accept::{Accept, DefaultAcceptor},
     handle::Handle,
+    http_config::HttpConfig,
     service::{MakeServiceRef, SendService},
-    HttpConfig,
 };
 use futures_util::future::poll_fn;
 use http::Request;
