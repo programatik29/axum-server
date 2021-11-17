@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
+None.
+
+# 0.3.2 (17. November 2021)
+
 - **added:** Added `HttpConfig` to allow more configuration.
 
 # 0.3.1 (10. November 2021)
