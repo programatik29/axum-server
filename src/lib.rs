@@ -88,17 +88,17 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod handle;
+mod http_config;
 mod notify_once;
 mod server;
-mod http_config;
 
 pub mod accept;
 pub mod service;
 
 pub use self::{
     handle::Handle,
-    server::{bind, Server},
     http_config::HttpConfig,
+    server::{bind, Server},
 };
 
 #[cfg(feature = "tls-rustls")]
