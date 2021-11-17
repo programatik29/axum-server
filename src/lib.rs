@@ -88,6 +88,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod handle;
+mod http_config;
 mod notify_once;
 mod server;
 
@@ -96,6 +97,7 @@ pub mod service;
 
 pub use self::{
     handle::Handle,
+    http_config::HttpConfig,
     server::{bind, Server},
 };
 

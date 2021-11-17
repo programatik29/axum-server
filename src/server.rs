@@ -1,13 +1,14 @@
 use crate::{
     accept::{Accept, DefaultAcceptor},
     handle::Handle,
+    http_config::HttpConfig,
     service::{MakeServiceRef, SendService},
 };
 use futures_util::future::poll_fn;
 use http::Request;
 use hyper::server::{
     accept::Accept as HyperAccept,
-    conn::{AddrIncoming, AddrStream, Http},
+    conn::{AddrIncoming, AddrStream},
 };
 use std::{
     io::{self, ErrorKind},
@@ -25,6 +26,7 @@ pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
     addr: SocketAddr,
     handle: Handle,
+    http_conf: HttpConfig,
 }
 
 /// Create a [`Server`] that will bind to provided address.
@@ -42,6 +44,7 @@ impl Server {
             acceptor,
             addr,
             handle,
+            http_conf: HttpConfig::default(),
         }
     }
 }
@@ -53,12 +56,19 @@ impl<A> Server<A> {
             acceptor,
             addr: self.addr,
             handle: self.handle,
+            http_conf: self.http_conf,
         }
     }
 
     /// Provide a handle for additional utilities.
     pub fn handle(mut self, handle: Handle) -> Self {
         self.handle = handle;
+        self
+    }
+
+    /// Overwrite http configuration.
+    pub fn http_config(mut self, config: HttpConfig) -> Self {
+        self.http_conf = config;
         self
     }
 
@@ -84,6 +94,7 @@ impl<A> Server<A> {
     {
         let acceptor = self.acceptor;
         let handle = self.handle;
+        let http_conf = self.http_conf;
 
         let listener = TcpListener::bind(self.addr).await?;
         let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
@@ -109,13 +120,15 @@ impl<A> Server<A> {
 
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
+                let http_conf = http_conf.clone();
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
                     {
                         let service = send_service.into_service();
 
-                        let serve_future = Http::new()
+                        let serve_future = http_conf
+                            .inner
                             .serve_connection(stream, service)
                             .with_upgrades();
 
