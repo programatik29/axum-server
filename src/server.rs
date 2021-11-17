@@ -66,7 +66,7 @@ impl<A> Server<A> {
         self
     }
 
-    /// Overwrite the [`Http`] configuration.
+    /// Overwrite http configuration.
     pub fn http_config(mut self, config: HttpConfig) -> Self {
         self.http_conf = config;
         self

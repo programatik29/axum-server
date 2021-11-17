@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use hyper::server::conn::Http;
+use std::time::Duration;
 
 /// A configuration for [`Http`].
 #[derive(Debug, Clone)]
