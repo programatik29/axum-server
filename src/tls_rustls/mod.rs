@@ -1,4 +1,4 @@
-//! Tls implementation using [`rustls`]
+//! Tls implementation using [`rustls`].
 //!
 //! # Example
 //!
