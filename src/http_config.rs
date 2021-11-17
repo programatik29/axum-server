@@ -164,10 +164,6 @@ impl HttpConfig {
     /// Pass `None` to disable HTTP2 keep-alive.
     ///
     /// Default is currently disabled.
-    ///
-    /// # Cargo Feature
-    ///
-    /// Requires the `runtime` cargo feature to be enabled.
     pub fn http2_keep_alive_interval(
         &mut self,
         interval: impl Into<Option<Duration>>,
@@ -182,10 +178,6 @@ impl HttpConfig {
     /// be closed. Does nothing if `http2_keep_alive_interval` is disabled.
     ///
     /// Default is 20 seconds.
-    ///
-    /// # Cargo Feature
-    ///
-    /// Requires the `runtime` cargo feature to be enabled.
     pub fn http2_keep_alive_timeout(&mut self, timeout: Duration) -> &mut Self {
         self.inner.http2_keep_alive_timeout(timeout);
         self
