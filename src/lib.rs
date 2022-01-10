@@ -98,7 +98,7 @@ pub mod service;
 pub use self::{
     handle::Handle,
     http_config::HttpConfig,
-    server::{bind, Server},
+    server::{bind, ServerBuilder},
 };
 
 #[cfg(feature = "tls-rustls")]
