@@ -77,7 +77,7 @@ impl<A> Server<A> {
     }
 
     /// Overwrite addr incoming configuration.
-    pub fn adder_incoming_config(mut self, config: AddrIncomingConfig) -> Self {
+    pub fn addr_incoming_config(mut self, config: AddrIncomingConfig) -> Self {
         self.addr_incomming_conf = config;
         self
     }
