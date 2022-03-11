@@ -13,7 +13,7 @@ version = "0.3.3"
 
 [features]
 default = []
-tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio-rustls"]
+tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
 
 [dependencies]
 bytes = "1"
@@ -21,7 +21,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 http = "0.2"
 http-body = "0.4"
 hyper = { version = "0.14.15", features = ["http1", "http2", "server", "runtime"] }
-tokio = { version = "1", features = ["macros", "net", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 
 # optional dependencies
