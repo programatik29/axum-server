@@ -34,6 +34,7 @@ use crate::{
 };
 use arc_swap::ArcSwap;
 use rustls::{Certificate, PrivateKey, ServerConfig};
+use std::time::Duration;
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -65,6 +66,7 @@ pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAccep
 pub struct RustlsAcceptor<A = DefaultAcceptor> {
     inner: A,
     config: RustlsConfig,
+    handshake_timeout: Duration,
 }
 
 impl RustlsAcceptor {
@@ -72,7 +74,24 @@ impl RustlsAcceptor {
     pub fn new(config: RustlsConfig) -> Self {
         let inner = DefaultAcceptor::new();
 
-        Self { inner, config }
+        #[cfg(not(test))]
+        let handshake_timeout = Duration::from_secs(10);
+
+        // Don't force tests to wait too long.
+        #[cfg(test)]
+        let handshake_timeout = Duration::from_secs(1);
+
+        Self {
+            inner,
+            config,
+            handshake_timeout,
+        }
+    }
+
+    /// Override the default TLS handshake timeout of 10 seconds, except during testing.
+    pub fn handshake_timeout(mut self, val: Duration) -> Self {
+        self.handshake_timeout = val;
+        self
     }
 }
 
@@ -82,6 +101,7 @@ impl<A> RustlsAcceptor<A> {
         RustlsAcceptor {
             inner: acceptor,
             config: self.config,
+            handshake_timeout: self.handshake_timeout,
         }
     }
 }
@@ -99,7 +119,7 @@ where
         let inner_future = self.inner.accept(stream, service);
         let config = self.config.clone();
 
-        RustlsAcceptorFuture::new(inner_future, config)
+        RustlsAcceptorFuture::new(inner_future, config, self.handshake_timeout)
     }
 }
 
@@ -283,6 +303,7 @@ mod tests {
         sync::Arc,
         time::{Duration, SystemTime},
     };
+    use tokio::time::sleep;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tokio_rustls::TlsConnector;
     use tower::{Service, ServiceExt};
@@ -296,6 +317,22 @@ mod tests {
         let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn tls_timeout() {
+        let (handle, _server_task, addr) = start_server().await;
+        assert_eq!(handle.connection_count(), 0);
+
+        // We intentionally avoid driving a TLS handshake to completion.
+        let _stream = TcpStream::connect(addr).await.unwrap();
+
+        sleep(Duration::from_millis(500)).await;
+        assert_eq!(handle.connection_count(), 1);
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        // Timeout defaults to 1s during testing, and we have waited 1.5 seconds.
+        assert_eq!(handle.connection_count(), 0);
     }
 
     #[tokio::test]

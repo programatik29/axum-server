@@ -2,6 +2,8 @@
 
 use crate::tls_rustls::RustlsConfig;
 use pin_project_lite::pin_project;
+use std::io::{Error, ErrorKind};
+use std::time::Duration;
 use std::{
     fmt,
     future::Future,
@@ -10,6 +12,7 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::{timeout, Timeout};
 use tokio_rustls::{server::TlsStream, Accept, TlsAcceptor};
 
 pin_project! {
@@ -22,8 +25,11 @@ pin_project! {
 }
 
 impl<F, I, S> RustlsAcceptorFuture<F, I, S> {
-    pub(crate) fn new(future: F, config: RustlsConfig) -> Self {
-        let inner = AcceptFuture::Inner { future };
+    pub(crate) fn new(future: F, config: RustlsConfig, handshake_timeout: Duration) -> Self {
+        let inner = AcceptFuture::Inner {
+            future,
+            handshake_timeout,
+        };
         let config = Some(config);
 
         Self { inner, config }
@@ -42,10 +48,11 @@ pin_project! {
         Inner {
             #[pin]
             future: F,
+            handshake_timeout: Duration,
         },
         Accept {
             #[pin]
-            future: Accept<I>,
+            future: Timeout<Accept<I>>,
             service: Option<S>,
         },
     }
@@ -63,7 +70,10 @@ where
 
         loop {
             match this.inner.as_mut().project() {
-                AcceptFutureProj::Inner { future } => {
+                AcceptFutureProj::Inner {
+                    future,
+                    handshake_timeout,
+                } => {
                     match future.poll(cx) {
                         Poll::Ready(Ok((stream, service))) => {
                             let server_config = this.config
@@ -75,20 +85,27 @@ where
                             let future = acceptor.accept(stream);
 
                             let service = Some(service);
+                            let handshake_timeout = *handshake_timeout;
 
-                            this.inner.set(AcceptFuture::Accept { future, service });
+                            this.inner.set(AcceptFuture::Accept {
+                                future: timeout(handshake_timeout, future),
+                                service,
+                            });
                         }
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                         Poll::Pending => return Poll::Pending,
                     }
                 }
                 AcceptFutureProj::Accept { future, service } => match future.poll(cx) {
-                    Poll::Ready(Ok(stream)) => {
+                    Poll::Ready(Ok(Ok(stream))) => {
                         let service = service.take().expect("future polled after ready");
 
                         return Poll::Ready(Ok((stream, service)));
                     }
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Err(timeout)) => {
+                        return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, timeout)))
+                    }
                     Poll::Pending => return Poll::Pending,
                 },
             }
