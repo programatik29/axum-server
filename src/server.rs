@@ -26,7 +26,7 @@ use tokio::{
 pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
     addr: SocketAddr,
-    addr_incomming_conf: AddrIncomingConfig,
+    addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
     http_conf: HttpConfig,
 }
@@ -45,7 +45,7 @@ impl Server {
         Self {
             acceptor,
             addr,
-            addr_incomming_conf: AddrIncomingConfig::default(),
+            addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
         }
@@ -58,7 +58,7 @@ impl<A> Server<A> {
         Server {
             acceptor,
             addr: self.addr,
-            addr_incomming_conf: self.addr_incomming_conf,
+            addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
         }
@@ -78,7 +78,7 @@ impl<A> Server<A> {
 
     /// Overwrite addr incoming configuration.
     pub fn addr_incoming_config(mut self, config: AddrIncomingConfig) -> Self {
-        self.addr_incomming_conf = config;
+        self.addr_incoming_conf = config;
         self
     }
 
@@ -103,7 +103,7 @@ impl<A> Server<A> {
         A::Future: Send,
     {
         let acceptor = self.acceptor;
-        let addr_incoming_conf = self.addr_incomming_conf;
+        let addr_incoming_conf = self.addr_incoming_conf;
         let handle = self.handle;
         let http_conf = self.http_conf;
 
