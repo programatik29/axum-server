@@ -75,6 +75,15 @@ impl HttpConfig {
         self
     }
 
+    /// Set a timeout for reading client request headers. If a client does not
+    /// transmit the entire header within this time, the connection is closed.
+    ///
+    /// Default is None.
+    pub fn http1_header_read_timeout(&mut self, val: Duration) -> &mut Self {
+        self.inner.http1_header_read_timeout(val);
+        self
+    }
+
     /// Set whether HTTP/1 connections should try to use vectored writes,
     /// or always flatten into a single buffer.
     ///
