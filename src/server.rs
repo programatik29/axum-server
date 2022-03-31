@@ -1,6 +1,6 @@
-use crate::addr_incoming_config::AddrIncomingConfig;
 use crate::{
     accept::{Accept, DefaultAcceptor},
+    addr_incoming_config::AddrIncomingConfig,
     handle::Handle,
     http_config::HttpConfig,
     service::{MakeServiceRef, SendService},
@@ -107,13 +107,15 @@ impl<A> Server<A> {
         let handle = self.handle;
         let http_conf = self.http_conf;
 
-        let listener = TcpListener::bind(self.addr).await?;
-        let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
-        incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);
-        incoming.set_keepalive(addr_incoming_conf.tcp_keepalive);
-        incoming.set_nodelay(addr_incoming_conf.tcp_nodelay);
+        let mut incoming = match bind_incoming(self.addr, addr_incoming_conf).await {
+            Ok(v) => v,
+            Err(e) => {
+                handle.notify_listening(None);
+                return Err(e);
+            }
+        };
 
-        handle.notify_listening(incoming.local_addr());
+        handle.notify_listening(Some(incoming.local_addr()));
 
         let accept_loop_future = async {
             loop {
@@ -170,6 +172,20 @@ impl<A> Server<A> {
 
         Ok(())
     }
+}
+
+async fn bind_incoming(
+    addr: SocketAddr,
+    addr_incoming_conf: AddrIncomingConfig,
+) -> io::Result<AddrIncoming> {
+    let listener = TcpListener::bind(addr).await?;
+    let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
+
+    incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);
+    incoming.set_keepalive(addr_incoming_conf.tcp_keepalive);
+    incoming.set_nodelay(addr_incoming_conf.tcp_nodelay);
+
+    Ok(incoming)
 }
 
 pub(crate) async fn accept(incoming: &mut AddrIncoming) -> io::Result<AddrStream> {
@@ -298,7 +314,7 @@ mod tests {
                 .await
         });
 
-        let addr = handle.listening().await;
+        let addr = handle.listening().await.unwrap();
 
         (handle, server_task, addr)
     }

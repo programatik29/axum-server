@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-/// A configuration for [`AddrIncoming`].
+/// A configuration for [`hyper::server::conn::AddrIncoming`].
 #[derive(Debug, Clone)]
 pub struct AddrIncomingConfig {
     pub(crate) tcp_sleep_on_accept_errors: bool,
@@ -15,7 +15,7 @@ impl Default for AddrIncomingConfig {
 }
 
 impl AddrIncomingConfig {
-    /// Creates a default [`AddrIncoming`] config.
+    /// Creates a default [`hyper::server::conn::AddrIncoming`] config.
     pub fn new() -> AddrIncomingConfig {
         Self {
             tcp_sleep_on_accept_errors: true,

@@ -359,7 +359,7 @@ mod tests {
                 .await
         });
 
-        let addr = handle.listening().await;
+        let addr = handle.listening().await.unwrap();
 
         let cert_a = get_first_cert(addr).await;
         let mut cert_b = get_first_cert(addr).await;
@@ -482,7 +482,7 @@ mod tests {
                 .await
         });
 
-        let addr = handle.listening().await;
+        let addr = handle.listening().await.unwrap();
 
         (handle, server_task, addr)
     }
