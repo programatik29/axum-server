@@ -13,7 +13,7 @@ version = "0.3.3"
 
 [features]
 default = []
-tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio-rustls"]
+tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
 
 [dependencies]
 bytes = "1"
