@@ -50,24 +50,22 @@ impl Handle {
     }
 
     /// Returns local address and port when server starts listening.
-    pub async fn listening(&self) -> SocketAddr {
+    ///
+    /// Returns `None` if server fails to bind.
+    pub async fn listening(&self) -> Option<SocketAddr> {
         let notified = self.inner.addr_notify.notified();
 
         if let Some(addr) = *self.inner.addr.lock().unwrap() {
-            return addr;
+            return Some(addr);
         }
 
         notified.await;
 
-        self.inner
-            .addr
-            .lock()
-            .unwrap()
-            .expect("notified before address is set")
+        *self.inner.addr.lock().unwrap()
     }
 
-    pub(crate) fn notify_listening(&self, addr: SocketAddr) {
-        *self.inner.addr.lock().unwrap() = Some(addr);
+    pub(crate) fn notify_listening(&self, addr: Option<SocketAddr>) {
+        *self.inner.addr.lock().unwrap() = addr;
 
         self.inner.addr_notify.notify_waiters();
     }
