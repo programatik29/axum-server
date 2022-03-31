@@ -1,3 +1,4 @@
+use crate::addr_incoming_config::AddrIncomingConfig;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     handle::Handle,
@@ -25,6 +26,7 @@ use tokio::{
 pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
     addr: SocketAddr,
+    addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
     http_conf: HttpConfig,
 }
@@ -43,6 +45,7 @@ impl Server {
         Self {
             acceptor,
             addr,
+            addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
         }
@@ -55,6 +58,7 @@ impl<A> Server<A> {
         Server {
             acceptor,
             addr: self.addr,
+            addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
         }
@@ -69,6 +73,12 @@ impl<A> Server<A> {
     /// Overwrite http configuration.
     pub fn http_config(mut self, config: HttpConfig) -> Self {
         self.http_conf = config;
+        self
+    }
+
+    /// Overwrite addr incoming configuration.
+    pub fn addr_incoming_config(mut self, config: AddrIncomingConfig) -> Self {
+        self.addr_incoming_conf = config;
         self
     }
 
@@ -93,11 +103,15 @@ impl<A> Server<A> {
         A::Future: Send,
     {
         let acceptor = self.acceptor;
+        let addr_incoming_conf = self.addr_incoming_conf;
         let handle = self.handle;
         let http_conf = self.http_conf;
 
         let listener = TcpListener::bind(self.addr).await?;
         let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
+        incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);
+        incoming.set_keepalive(addr_incoming_conf.tcp_keepalive);
+        incoming.set_nodelay(addr_incoming_conf.tcp_nodelay);
 
         handle.notify_listening(incoming.local_addr());
 
