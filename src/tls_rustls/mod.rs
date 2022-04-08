@@ -262,8 +262,8 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
 
     let cert = rustls_pemfile::certs(&mut cert.as_ref())?;
     let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
-        Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) => key,
-        _ => return Err(io_other("private key not found")),
+        Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) | Some(Item::ECKey(key)) => key,
+        _ => return Err(io_other("private key format not supported")),
     };
 
     config_from_der(cert, key)
