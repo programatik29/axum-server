@@ -319,6 +319,7 @@ mod tests {
         assert_eq!(body.as_ref(), b"Hello, world!");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn tls_timeout() {
         let (handle, _server_task, addr) = start_server().await;
