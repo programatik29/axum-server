@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
+None.
+
+# 0.4.0 (18. April 2022)
+
 - Added TLS handshake timeout(10 seconds).
 - In `RustlsConfig`: `from_pem` and `from_pem_file` methods now accept EC
   keys.
