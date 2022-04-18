@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 async fn main() {
     let app = Router::new()
         .route("/", get(handler))
-        .into_make_service_with_connect_info::<SocketAddr, _>();
+        .into_make_service_with_connect_info::<SocketAddr>();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 

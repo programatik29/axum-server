@@ -5,7 +5,7 @@
 
 use axum::{http::uri::Uri, response::Redirect, routing::get, Router};
 use axum_server::tls_rustls::RustlsConfig;
-use std::{convert::TryInto, net::SocketAddr};
+use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() {
@@ -28,11 +28,9 @@ async fn http_server() {
 }
 
 async fn http_handler(uri: Uri) -> Redirect {
-    let uri = format!("https://127.0.0.1:3443{}", uri.path())
-        .try_into()
-        .unwrap();
+    let uri = format!("https://127.0.0.1:3443{}", uri.path());
 
-    Redirect::found(uri)
+    Redirect::temporary(&uri)
 }
 
 async fn https_server() {
