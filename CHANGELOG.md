@@ -7,7 +7,14 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
-None.
+- Added TLS handshake timeout(10 seconds).
+- In `RustlsConfig`: `from_pem` and `from_pem_file` methods now accept EC
+  keys.
+- **added:** Added `AddrIncomingConfig` to allow configuration of
+  `hyper::server::conn::AddrIncoming`.
+- **added:** Added `HttpConfig::http1_header_read_timeout`.
+- **breaking:** Changed `Handle::listening` return type to
+  `Option<SocketAddr>`. If binding fails, `Option::None` will be returned.
 
 # 0.3.2 (17. November 2021)
 
@@ -15,8 +22,8 @@ None.
 
 # 0.3.1 (10. November 2021)
 
-- **fixed:** `tls-rustls` feature doesn't compile if `fs` feature in `tokio` is
-  not enabled.
+- **fixed:** `tls-rustls` feature doesn't compile if `fs` feature in `tokio`
+  is not enabled.
 
 # 0.3.0 (10. November 2021)
 
@@ -28,8 +35,8 @@ None.
   - **breaking:** Removed `tls` module.
   - **breaking:** Removed `record` module and feature.
   - **breaking:** Removed `Handle::listening_addrs` method.
-  - **breaking:** `Server::bind` method doesn't take `self` anymore and creates
-    an `Server`.
+  - **breaking:** `Server::bind` method doesn't take `self` anymore and
+    creates an `Server`.
   - **breaking:** `bind` method now takes a `SocketAddr`.
   - **breaking:** `bind_rustls` method now takes a `SocketAddr` and an
     `tls_rustls::RustlsConfig`.
