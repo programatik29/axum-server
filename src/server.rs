@@ -99,7 +99,7 @@ impl<A> Server<A> {
         M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
         A: Accept<AddrStream, M::Service> + Clone + Send + Sync + 'static,
         A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-        A::Service: SendService<Request<hyper::Body>> + Send,
+        A::Service: SendService<Request<hyper::Body>>,
         A::Future: Send,
     {
         let acceptor = self.acceptor;
@@ -139,10 +139,7 @@ impl<A> Server<A> {
                 let http_conf = http_conf.clone();
 
                 tokio::spawn(async move {
-                    if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
-                    {
-                        let service = send_service.into_service();
-
+                    if let Ok((stream, service)) = acceptor.accept(addr_stream, service).await {
                         let serve_future = http_conf
                             .inner
                             .serve_connection(stream, service)
