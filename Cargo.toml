@@ -53,3 +53,7 @@ required-features = ["tls-rustls"]
 [[example]]
 name = "rustls_server"
 required-features = ["tls-rustls"]
+
+[[example]]
+name = "rustls_session"
+required-features = ["tls-rustls"]
