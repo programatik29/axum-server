@@ -8,7 +8,7 @@ use axum_server::{
     tls_rustls::{RustlsAcceptor, RustlsConfig},
 };
 use futures_util::future::BoxFuture;
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::server::TlsStream;
 use tower::Layer;
@@ -40,7 +40,7 @@ async fn handler(tls_data: Extension<TlsData>) -> String {
 
 #[derive(Debug, Clone)]
 struct TlsData {
-    _hostname: Option<String>,
+    _hostname: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ where
             let (stream, service) = acceptor.accept(stream, service).await?;
             let server_conn = stream.get_ref().1;
             let sni_hostname = TlsData {
-                _hostname: server_conn.sni_hostname().map(ToOwned::to_owned),
+                _hostname: server_conn.sni_hostname().map(From::from),
             };
             let service = Extension(sni_hostname).layer(service);
 
