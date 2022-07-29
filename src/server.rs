@@ -64,6 +64,30 @@ impl<A> Server<A> {
         }
     }
 
+    /// Map acceptor.
+    pub fn map<Acceptor, F>(self, acceptor: F) -> Server<Acceptor>
+    where
+        F: FnOnce(A) -> Acceptor,
+    {
+        Server {
+            acceptor: acceptor(self.acceptor),
+            addr: self.addr,
+            addr_incoming_conf: self.addr_incoming_conf,
+            handle: self.handle,
+            http_conf: self.http_conf,
+        }
+    }
+
+    /// Returns a reference to the acceptor.
+    pub fn get_ref(&self) -> &A {
+        &self.acceptor
+    }
+
+    /// Returns a mutable reference to the acceptor.
+    pub fn get_mut(&mut self) -> &mut A {
+        &mut self.acceptor
+    }
+
     /// Provide a handle for additional utilities.
     pub fn handle(mut self, handle: Handle) -> Self {
         self.handle = handle;
