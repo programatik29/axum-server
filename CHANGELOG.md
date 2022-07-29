@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.4.1 (29. July 2022)
+
+- **added:** Added `map`, `get` and `get_mut` methods to access the acceptor
+  of `Server`.
+
 # 0.4.0 (18. April 2022)
 
 - Added TLS handshake timeout(10 seconds).
