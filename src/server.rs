@@ -108,6 +108,8 @@ impl<A> Server<A> {
 
     /// Serve provided [`MakeService`].
     ///
+    /// To create [`MakeService`] easily, `Shared` from [`tower`] can be used.
+    ///
     /// # Errors
     ///
     /// An error will be returned when:
@@ -117,6 +119,7 @@ impl<A> Server<A> {
     /// [`axum`] make services.
     ///
     /// [`axum`]: https://docs.rs/axum/0.3
+    /// [`tower`]: https://docs.rs/tower
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
