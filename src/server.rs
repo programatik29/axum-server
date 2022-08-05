@@ -232,7 +232,10 @@ async fn bind_incoming(
 ) -> io::Result<AddrIncoming> {
     let listener = match listener {
         Listener::Bind(addr) => TcpListener::bind(addr).await?,
-        Listener::Std(std_listener) => TcpListener::from_std(std_listener)?,
+        Listener::Std(std_listener) => {
+            std_listener.set_nonblocking(true)?;
+            TcpListener::from_std(std_listener)?
+        }
     };
     let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
 
