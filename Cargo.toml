@@ -44,6 +44,10 @@ cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples=examples"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
+name = "from_std_listener_rustls"
+required-features = ["tls-rustls"]
+
+[[example]]
 name = "http_and_https"
 required-features = ["tls-rustls"]
 

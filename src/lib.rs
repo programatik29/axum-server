@@ -100,7 +100,7 @@ pub use self::{
     addr_incoming_config::AddrIncomingConfig,
     handle::Handle,
     http_config::HttpConfig,
-    server::{bind, Server},
+    server::{bind, from_tcp, Server},
 };
 
 #[cfg(feature = "tls-rustls")]
@@ -109,4 +109,4 @@ pub mod tls_rustls;
 
 #[doc(inline)]
 #[cfg(feature = "tls-rustls")]
-pub use self::tls_rustls::export::bind_rustls;
+pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};

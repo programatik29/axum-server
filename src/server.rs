@@ -25,15 +25,26 @@ use tokio::{
 #[derive(Debug)]
 pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
-    addr: SocketAddr,
+    listener: Listener,
     addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
     http_conf: HttpConfig,
 }
 
+#[derive(Debug)]
+enum Listener {
+    Bind(SocketAddr),
+    Std(std::net::TcpListener),
+}
+
 /// Create a [`Server`] that will bind to provided address.
 pub fn bind(addr: SocketAddr) -> Server {
     Server::bind(addr)
+}
+
+/// Create a [`Server`] from existing `std::net::TcpListener`.
+pub fn from_tcp(listener: std::net::TcpListener) -> Server {
+    Server::from_tcp(listener)
 }
 
 impl Server {
@@ -44,7 +55,21 @@ impl Server {
 
         Self {
             acceptor,
-            addr,
+            listener: Listener::Bind(addr),
+            addr_incoming_conf: AddrIncomingConfig::default(),
+            handle,
+            http_conf: HttpConfig::default(),
+        }
+    }
+
+    /// Create a server from existing `std::net::TcpListener`.
+    pub fn from_tcp(listener: std::net::TcpListener) -> Self {
+        let acceptor = DefaultAcceptor::new();
+        let handle = Handle::new();
+
+        Self {
+            acceptor,
+            listener: Listener::Std(listener),
             addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
@@ -57,7 +82,7 @@ impl<A> Server<A> {
     pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> Server<Acceptor> {
         Server {
             acceptor,
-            addr: self.addr,
+            listener: self.listener,
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
@@ -71,7 +96,7 @@ impl<A> Server<A> {
     {
         Server {
             acceptor: acceptor(self.acceptor),
-            addr: self.addr,
+            listener: self.listener,
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
@@ -134,7 +159,7 @@ impl<A> Server<A> {
         let handle = self.handle;
         let http_conf = self.http_conf;
 
-        let mut incoming = match bind_incoming(self.addr, addr_incoming_conf).await {
+        let mut incoming = match bind_incoming(self.listener, addr_incoming_conf).await {
             Ok(v) => v,
             Err(e) => {
                 handle.notify_listening(None);
@@ -202,10 +227,13 @@ impl<A> Server<A> {
 }
 
 async fn bind_incoming(
-    addr: SocketAddr,
+    listener: Listener,
     addr_incoming_conf: AddrIncomingConfig,
 ) -> io::Result<AddrIncoming> {
-    let listener = TcpListener::bind(addr).await?;
+    let listener = match listener {
+        Listener::Bind(addr) => TcpListener::bind(addr).await?,
+        Listener::Std(std_listener) => TcpListener::from_std(std_listener)?,
+    };
     let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
 
     incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);

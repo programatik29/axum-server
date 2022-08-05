@@ -7,7 +7,9 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
-None.
+- **added:** Added `Server::from_tcp`, `axum_server::from_tcp` and
+  `axum_server::from_tcp_rustls` methods to create `Server` from
+  `std::net::TcpListener`.
 
 # 0.4.1 (29. July 2022)
 

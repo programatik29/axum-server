@@ -50,6 +50,17 @@ pub(crate) mod export {
     pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
         super::bind_rustls(addr, config)
     }
+
+    /// Create a tls server from existing `std::net::TcpListener`.
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    pub fn from_tcp_rustls(
+        listener: std::net::TcpListener,
+        config: RustlsConfig,
+    ) -> Server<RustlsAcceptor> {
+        let acceptor = RustlsAcceptor::new(config);
+
+        Server::from_tcp(listener).acceptor(acceptor)
+    }
 }
 
 pub mod future;
@@ -59,6 +70,16 @@ pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAccep
     let acceptor = RustlsAcceptor::new(config);
 
     Server::bind(addr).acceptor(acceptor)
+}
+
+/// Create a tls server from existing `std::net::TcpListener`.
+pub fn from_tcp_rustls(
+    listener: std::net::TcpListener,
+    config: RustlsConfig,
+) -> Server<RustlsAcceptor> {
+    let acceptor = RustlsAcceptor::new(config);
+
+    Server::from_tcp(listener).acceptor(acceptor)
 }
 
 /// Tls acceptor using rustls.
