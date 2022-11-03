@@ -241,6 +241,8 @@ async fn bind_incoming(
 
     incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);
     incoming.set_keepalive(addr_incoming_conf.tcp_keepalive);
+    incoming.set_keepalive_interval(addr_incoming_conf.tcp_keepalive_interval);
+    incoming.set_keepalive_retries(addr_incoming_conf.tcp_keepalive_retries);
     incoming.set_nodelay(addr_incoming_conf.tcp_nodelay);
 
     Ok(incoming)

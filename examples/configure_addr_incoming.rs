@@ -15,6 +15,8 @@ async fn main() {
         .tcp_nodelay(true)
         .tcp_sleep_on_accept_errors(true)
         .tcp_keepalive(Some(Duration::from_secs(32)))
+        .tcp_keepalive_interval(Some(Duration::from_secs(1)))
+        .tcp_keepalive_retries(Some(1))
         .build();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
