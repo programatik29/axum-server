@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.4.3 (3. November 2022)
+
+- **added:** Added `tcp_keepalive_interval` and `tcp_keepalive_retries` to
+  `AddrIncomingConfig`.
+
 # 0.4.2 (5. August 2022)
 
 - **added:** Added `Server::from_tcp`, `axum_server::from_tcp` and
