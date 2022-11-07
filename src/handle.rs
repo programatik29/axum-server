@@ -43,6 +43,8 @@ impl Handle {
     }
 
     /// Gracefully shutdown the server.
+    ///
+    /// `None` means indefinite grace period.
     pub fn graceful_shutdown(&self, duration: Option<Duration>) {
         *self.inner.graceful_dur.lock().unwrap() = duration;
 
