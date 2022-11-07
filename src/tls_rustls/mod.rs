@@ -158,6 +158,8 @@ pub struct RustlsConfig {
 
 impl RustlsConfig {
     /// Create config from `Arc<`[`ServerConfig`]`>`.
+    ///
+    /// NOTE: You need to set ALPN protocols (like `http/1.1` or `h2`) manually.
     pub fn from_config(config: Arc<ServerConfig>) -> Self {
         let inner = Arc::new(ArcSwap::new(config));
 
