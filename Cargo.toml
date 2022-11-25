@@ -32,7 +32,7 @@ rustls-pemfile = { version = "1", optional = true }
 tokio-rustls = { version = "0.23", optional = true }
 
 [dev-dependencies]
-axum = "0.5"
+axum = "0.6"
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }
