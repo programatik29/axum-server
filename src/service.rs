@@ -12,24 +12,24 @@ use tower_service::Service;
 ///
 /// This trait is sealed and cannot be implemented for types outside this crate.
 #[allow(missing_docs)]
-pub trait SendService<Request>: send_service::Sealed<Request> {
-    type Service: Service<
+pub trait SendService<Request>
+where
+    Self: send_service::Sealed<Request>
+        + Service<
             Request,
-            Response = Response<Self::Body>,
-            Error = Self::Error,
-            Future = Self::Future,
+            Response = Response<<Self as SendService<Request>>::Body>,
+            Error = <Self as SendService<Request>>::_Error,
+            Future = <Self as SendService<Request>>::_Future,
         > + Send
-        + 'static;
-
+        + 'static,
+{
     type Body: Body<Data = Self::BodyData, Error = Self::BodyError> + Send + 'static;
     type BodyData: Send + 'static;
     type BodyError: Into<Box<dyn std::error::Error + Send + Sync>>;
 
-    type Error: Into<Box<dyn std::error::Error + Send + Sync>>;
-
-    type Future: Future<Output = Result<Response<Self::Body>, Self::Error>> + Send + 'static;
-
-    fn into_service(self) -> Self::Service;
+    // Types from `Service` given a different name to avoid ambiguities.
+    type _Error: Into<Box<dyn std::error::Error + Send + Sync>>;
+    type _Future: Future<Output = Result<Response<Self::Body>, Self::Error>> + Send + 'static;
 }
 
 impl<T, B, Request> send_service::Sealed<Request> for T
@@ -52,19 +52,12 @@ where
     B::Data: Send + 'static,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    type Service = T;
-
     type Body = B;
     type BodyData = B::Data;
     type BodyError = B::Error;
 
-    type Error = T::Error;
-
-    type Future = T::Future;
-
-    fn into_service(self) -> Self::Service {
-        self
-    }
+    type _Error = T::Error;
+    type _Future = T::Future;
 }
 
 /// Modified version of [`MakeService`] that takes a `&Target` and has required trait bounds for
