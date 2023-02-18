@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.4.5 (18. February 2023)
+
+- **changed:** `Handle::graceful_shutdown` now informs connections about the
+  graceful shutdown.
+
 # 0.4.3 (3. November 2022)
 
 - **added:** Added `tcp_keepalive_interval` and `tcp_keepalive_retries` to
