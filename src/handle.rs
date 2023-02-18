@@ -113,6 +113,10 @@ impl Watcher {
         Self { handle }
     }
 
+    pub(crate) async fn wait_graceful_shutdown(&self) {
+        self.handle.wait_graceful_shutdown().await
+    }
+
     pub(crate) async fn wait_shutdown(&self) {
         self.handle.wait_shutdown().await
     }

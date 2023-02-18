@@ -195,15 +195,23 @@ impl<A> Server<A> {
                     {
                         let service = send_service.into_service();
 
-                        let serve_future = http_conf
+                        let mut serve_future = http_conf
                             .inner
                             .serve_connection(stream, service)
                             .with_upgrades();
 
                         tokio::select! {
                             biased;
+                            _ = watcher.wait_graceful_shutdown() => {
+                                Pin::new(&mut serve_future).graceful_shutdown();
+                                tokio::select! {
+                                    biased;
+                                    _ = watcher.wait_shutdown() => (),
+                                    _ = &mut serve_future => (),
+                                }
+                            }
                             _ = watcher.wait_shutdown() => (),
-                            _ = serve_future => (),
+                            _ = &mut serve_future => (),
                         }
                     }
                 });
