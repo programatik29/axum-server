@@ -40,7 +40,7 @@ tower-http = { version = "0.3", features = ["add-extension"] }
 
 [package.metadata.docs.rs]
 all-features = true
-cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples=examples"]
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
