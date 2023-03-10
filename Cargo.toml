@@ -14,6 +14,7 @@ version = "0.4.6"
 [features]
 default = []
 tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
+tls-openssl = ["openssl", "tokio-openssl", "pin-project-lite"]
 
 [dependencies]
 bytes = "1"
@@ -25,11 +26,16 @@ tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 
 # optional dependencies
+## rustls
 arc-swap = { version = "1", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 rustls = { version = "0.20", features = ["dangerous_configuration"], optional = true }
 rustls-pemfile = { version = "1", optional = true }
 tokio-rustls = { version = "0.23", optional = true }
+
+## openssl
+openssl = { version = "0.10", optional = true }
+tokio-openssl = { version = "0.6", optional = true }
 
 [dev-dependencies]
 axum = "0.6"
