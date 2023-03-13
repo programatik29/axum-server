@@ -29,22 +29,12 @@
 use self::future::OpenSSLAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
-    server::{io_other, Server},
+    server::Server,
 };
 use openssl::ssl::Error as OpenSSLError;
-use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslContext, SslFiletype, SslMethod};
-use std::{
-    convert::TryFrom,
-    fmt, io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    task::spawn_blocking,
-};
+use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod};
+use std::{convert::TryFrom, fmt, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
 
 pub mod future;
@@ -57,6 +47,8 @@ pub fn bind_openssl(addr: SocketAddr, config: OpenSSLConfig) -> Server<OpenSSLAc
     Server::bind(addr).acceptor(acceptor)
 }
 
+/// Tls acceptor that uses OpenSSL. For details on how to use this see [`crate::tls_openssl`] module
+/// for more details.
 #[derive(Clone)]
 pub struct OpenSSLAcceptor<A = DefaultAcceptor> {
     inner: A,
@@ -194,6 +186,12 @@ impl TryFrom<SslAcceptorBuilder> for OpenSSLConfig {
     }
 }
 
+impl fmt::Debug for OpenSSLConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenSSLConfig").finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -207,14 +205,7 @@ mod tests {
         client::conn::{handshake, SendRequest},
         Body,
     };
-    use std::{
-        convert::TryFrom,
-        io,
-        net::SocketAddr,
-        sync::Arc,
-        time::{Duration, SystemTime},
-    };
-    use tokio::time::sleep;
+    use std::{io, net::SocketAddr, time::Duration};
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tower::{Service, ServiceExt};
 
@@ -359,6 +350,12 @@ mod tests {
     async fn tls_connector(hostname: &str, stream: TcpStream) -> SslStream<TcpStream> {
         let mut tls_parms = SslConnector::builder(SslMethod::tls_client()).unwrap();
         tls_parms.set_verify(SslVerifyMode::NONE);
+        let hostname_owned = hostname.to_string();
+        tls_parms.set_client_hello_callback(move |ssl_ref, _ssl_alert| {
+            ssl_ref
+                .set_hostname(hostname_owned.as_str())
+                .map(|()| openssl::ssl::ClientHelloResponse::SUCCESS)
+        });
         let tls_parms = tls_parms.build();
 
         let ssl = Ssl::new(tls_parms.context()).unwrap();

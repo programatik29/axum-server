@@ -14,7 +14,6 @@ use std::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{timeout, Timeout};
 
-use openssl::ssl::Error as OpenSSLError;
 use openssl::ssl::Ssl;
 use tokio_openssl::SslStream;
 
