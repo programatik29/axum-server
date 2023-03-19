@@ -52,19 +52,24 @@ rustdoc-args = ["--cfg", "docsrs"]
 [[example]]
 name = "from_std_listener_rustls"
 required-features = ["tls-rustls"]
+doc-scrape-examples = true
 
 [[example]]
 name = "http_and_https"
 required-features = ["tls-rustls"]
+doc-scrape-examples = true
 
 [[example]]
 name = "rustls_reload"
 required-features = ["tls-rustls"]
+doc-scrape-examples = true
 
 [[example]]
 name = "rustls_server"
 required-features = ["tls-rustls"]
+doc-scrape-examples = true
 
 [[example]]
 name = "rustls_session"
 required-features = ["tls-rustls"]
+doc-scrape-examples = true
