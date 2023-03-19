@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.4.7 (19. March 2023)
+
+- **added:** Openssl is now supported.
+
 # 0.4.5 (18. February 2023)
 
 - **changed:** `Handle::graceful_shutdown` now informs connections about the
