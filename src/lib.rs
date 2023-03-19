@@ -3,7 +3,7 @@
 //! # Features
 //!
 //! - HTTP/1 and HTTP/2
-//! - HTTPS through [rustls].
+//! - HTTPS through [rustls] or [openssl].
 //! - High performance through [hyper].
 //! - Using [tower] make service API.
 //! - Very good [axum] compatibility. Likely to work with future [axum] releases.
@@ -27,6 +27,11 @@
 //! [`bind_rustls`] can be called by providing [`RustlsConfig`] to create a HTTPS [`Server`] that
 //! will bind on provided [`SocketAddr`]. [`RustlsConfig`] can be cloned, reload methods can be
 //! used on clone to reload tls configuration.
+//!
+//! # Features
+//!
+//! * `tls-rustls` - activate [rustls] support.
+//! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
 //!
@@ -56,6 +61,7 @@
 //! [bind_rustls]: crate::bind_rustls
 //! [created]: https://docs.rs/axum/0.3/axum/struct.Router.html#method.into_make_service
 //! [hyper]: https://crates.io/crates/hyper
+//! [openssl]: https://crates.io/crates/openssl
 //! [repository]: https://github.com/programatik29/axum-server/tree/v0.3.0/examples
 //! [rustls]: https://crates.io/crates/rustls
 //! [tower]: https://crates.io/crates/tower
@@ -110,3 +116,11 @@ pub mod tls_rustls;
 #[doc(inline)]
 #[cfg(feature = "tls-rustls")]
 pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
+
+#[cfg(feature = "tls-openssl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-openssl")))]
+pub mod tls_openssl;
+
+#[doc(inline)]
+#[cfg(feature = "tls-openssl")]
+pub use self::tls_openssl::bind_openssl;
