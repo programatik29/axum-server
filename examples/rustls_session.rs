@@ -70,7 +70,7 @@ where
             let (stream, service) = acceptor.accept(stream, service).await?;
             let server_conn = stream.get_ref().1;
             let sni_hostname = TlsData {
-                _hostname: server_conn.sni_hostname().map(From::from),
+                _hostname: server_conn.server_name().map(From::from),
             };
             let service = Extension(sni_hostname).layer(service);
 
