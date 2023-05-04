@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.5.0 (4. May 2023)
+
+- **breaking:** Updated `rustls` from `0.20` to `0.21` which affects
+  `ServerConfig` type.
+- **breaking:** Updated `tokio-rustls` from `0.23` to `0.24` which affects
+  `TlsStream` type.
+
 # 0.4.7 (19. March 2023)
 
 - **added:** Openssl is now supported.
