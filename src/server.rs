@@ -146,13 +146,48 @@ impl<A> Server<A> {
     /// [`axum`]: https://docs.rs/axum/0.3
     /// [`tower`]: https://docs.rs/tower
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
-    pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
+    pub async fn serve<M>(self, make_service: M) -> io::Result<()>
     where
         M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
         A: Accept<AddrStream, M::Service> + Clone + Send + Sync + 'static,
         A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
         A::Service: SendService<Request<hyper::Body>> + Send,
         A::Future: Send,
+    {
+        self.serve_with_conn_data::<_, (), _>(make_service, |_| None).await
+    }
+
+    /// Serve provided [`MakeService`], running a user-provided handler for connection data.
+    ///
+    /// To create [`MakeService`] easily, `Shared` from [`tower`] can be used. The handler `func`
+    /// can be used to produce a per-connection data object based on the accepted IO stream. If it
+    /// produces `Some`, the resulting value will be cloned and added as an extension to each
+    /// request occurring on that connection.
+    ///
+    /// # Errors
+    ///
+    /// An error will be returned when:
+    ///
+    /// - Binding to an address fails.
+    /// - `make_service` returns an error when `poll_ready` is called. This never happens on
+    /// [`axum`] make services.
+    ///
+    /// [`axum`]: https://docs.rs/axum/0.3
+    /// [`tower`]: https://docs.rs/tower
+    /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
+    pub async fn serve_with_conn_data<M, C, F>(
+        self,
+        mut make_service: M,
+        func: F,
+    ) -> io::Result<()>
+    where
+        M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
+        A: Accept<AddrStream, M::Service> + Clone + Send + Sync + 'static,
+        A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+        A::Service: SendService<Request<hyper::Body>> + Send,
+        A::Future: Send,
+        F: for<'a> Fn(&'a A::Stream) -> Option<C> + Send + Sync + 'static,
+        C: Clone + Send + Sync + 'static,
     {
         let acceptor = self.acceptor;
         let addr_incoming_conf = self.addr_incoming_conf;
@@ -169,6 +204,7 @@ impl<A> Server<A> {
 
         handle.notify_listening(Some(incoming.local_addr()));
 
+        let func = std::sync::Arc::new(func);
         let accept_loop_future = async {
             loop {
                 let addr_stream = tokio::select! {
@@ -189,11 +225,14 @@ impl<A> Server<A> {
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
                 let http_conf = http_conf.clone();
+                let func = func.clone();
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
                     {
+                        let ext_obj = (func)(&stream);
                         let service = send_service.into_service();
+                        let service = AddExtension { service, object: ext_obj };
 
                         let mut serve_future = http_conf
                             .inner
@@ -411,5 +450,34 @@ mod tests {
         let body = hyper::body::to_bytes(body).await.unwrap();
 
         (parts, body)
+    }
+}
+
+/// Internal service wrapper adding an extension object to each request
+struct AddExtension<C, S: hyper::service::Service<Request<hyper::Body>>> {
+    service: S,
+    object: Option<C>,
+}
+
+impl<C, S> hyper::service::Service<Request<hyper::Body>> for AddExtension<C, S>
+where S: hyper::service::Service<Request<hyper::Body>>,
+      C: Clone + Send + Sync + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: Request<hyper::Body>) -> Self::Future {
+        if let Some(obj) = self.object.clone() {
+            req.extensions_mut().insert(obj);
+        }
+        self.service.call(req)
     }
 }
