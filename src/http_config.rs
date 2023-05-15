@@ -145,6 +145,14 @@ impl HttpConfig {
         self
     }
 
+    /// Enables the [extended CONNECT protocol].
+    ///
+    /// [extended CONNECT protocol]: https://datatracker.ietf.org/doc/html/rfc8441#section-4
+    pub fn http2_enable_connect_protocol(&mut self) -> &mut Self {
+        self.inner.http2_enable_connect_protocol();
+        self
+    }
+
     /// Sets the maximum frame size to use for HTTP2.
     ///
     /// Passing `None` will do nothing.
@@ -163,6 +171,40 @@ impl HttpConfig {
     /// [spec]: https://http2.github.io/http2-spec/#SETTINGS_MAX_CONCURRENT_STREAMS
     pub fn http2_max_concurrent_streams(&mut self, max: impl Into<Option<u32>>) -> &mut Self {
         self.inner.http2_max_concurrent_streams(max);
+        self
+    }
+
+    /// Sets the max size of received header frames.
+    ///
+    /// Default is currently ~16MB, but may change.
+    pub fn http2_max_header_list_size(&mut self, max: u32) -> &mut Self {
+        self.inner.http2_max_header_list_size(max);
+        self
+    }
+
+    /// Configures the maximum number of pending reset streams allowed before a GOAWAY will be sent.
+    ///
+    /// This will default to the default value set by the [`h2` crate](https://crates.io/crates/h2).
+    /// As of v0.3.17, it is 20.
+    ///
+    /// See <https://github.com/hyperium/hyper/issues/2877> for more information.
+    pub fn http2_max_pending_accept_reset_streams(
+        &mut self,
+        max: impl Into<Option<usize>>,
+    ) -> &mut Self {
+        self.inner.http2_max_pending_accept_reset_streams(max);
+        self
+    }
+
+    /// Set the maximum write buffer size for each HTTP/2 stream.
+    ///
+    /// Default is currently ~400KB, but may change.
+    ///
+    /// # Panics
+    ///
+    /// The value must be no larger than `u32::MAX`.
+    pub fn http2_max_send_buf_size(&mut self, max: usize) -> &mut Self {
+        self.inner.http2_max_send_buf_size(max);
         self
     }
 
@@ -191,7 +233,7 @@ impl HttpConfig {
         self
     }
 
-    /// Set the maximum buffer size for the connection.
+    /// Set the maximum buffer size for the HTTP/1 connection.
     ///
     /// Default is ~400kb.
     ///
