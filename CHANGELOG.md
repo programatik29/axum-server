@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 None.
 
+# 0.5.1 (15. May 2023)
+
+- **added:** `http2_enable_connect_protocol`, `http2_max_header_list_size`,
+  `http2_max_pending_accept_reset_streams` and `http2_max_send_buf_size`
+  methods to `HttpConfig`.
+
 # 0.5.0 (4. May 2023)
 
 - **breaking:** Updated `rustls` from `0.20` to `0.21` which affects
