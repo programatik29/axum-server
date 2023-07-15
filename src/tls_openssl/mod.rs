@@ -34,7 +34,7 @@ use crate::{
 use arc_swap::ArcSwap;
 use openssl::{
     pkey::PKey,
-    ssl::{Error as OpenSSLError, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod},
+    ssl::{self, AlpnError, Error as OpenSSLError, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod, SslRef},
     x509::X509,
 };
 use std::{convert::TryFrom, fmt, net::SocketAddr, path::Path, sync::Arc, time::Duration};
@@ -237,9 +237,10 @@ impl TryFrom<SslAcceptorBuilder> for OpenSSLConfig {
     ///     let _config = OpenSSLConfig::try_from(tls_builder);
     /// }
     /// ```
-    fn try_from(tls_builder: SslAcceptorBuilder) -> Result<Self, Self::Error> {
+    fn try_from(mut tls_builder: SslAcceptorBuilder) -> Result<Self, Self::Error> {
         // Any other checks?
         tls_builder.check_private_key()?;
+        tls_builder.set_alpn_select_callback(alpn_select);
 
         let acceptor = Arc::new(ArcSwap::from_pointee(tls_builder.build()));
 
@@ -253,6 +254,10 @@ impl fmt::Debug for OpenSSLConfig {
     }
 }
 
+fn alpn_select<'a>(_tls: &mut SslRef, client: &'a [u8]) -> Result<&'a [u8], AlpnError> {
+    ssl::select_next_proto(b"\x02h2\x08http/1.1", client).ok_or(AlpnError::NOACK)
+}
+
 fn config_from_der(cert: &[u8], key: &[u8]) -> Result<SslAcceptor, OpenSSLError> {
     let cert = X509::from_der(cert)?;
     let key = PKey::private_key_from_der(key)?;
@@ -261,6 +266,7 @@ fn config_from_der(cert: &[u8], key: &[u8]) -> Result<SslAcceptor, OpenSSLError>
     tls_builder.set_certificate(&cert)?;
     tls_builder.set_private_key(&key)?;
     tls_builder.check_private_key()?;
+    tls_builder.set_alpn_select_callback(alpn_select);
 
     let acceptor = tls_builder.build();
     Ok(acceptor)
@@ -274,6 +280,7 @@ fn config_from_pem(cert: &[u8], key: &[u8]) -> Result<SslAcceptor, OpenSSLError>
     tls_builder.set_certificate(&cert)?;
     tls_builder.set_private_key(&key)?;
     tls_builder.check_private_key()?;
+    tls_builder.set_alpn_select_callback(alpn_select);
 
     let acceptor = tls_builder.build();
     Ok(acceptor)
@@ -287,6 +294,7 @@ fn config_from_pem_file(
     tls_builder.set_certificate_file(cert, SslFiletype::PEM)?;
     tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
     tls_builder.check_private_key()?;
+    tls_builder.set_alpn_select_callback(alpn_select);
 
     let acceptor = tls_builder.build();
     Ok(acceptor)
@@ -300,6 +308,7 @@ fn config_from_pem_chain_file(
     tls_builder.set_certificate_chain_file(chain)?;
     tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
     tls_builder.check_private_key()?;
+    tls_builder.set_alpn_select_callback(alpn_select);
 
     let acceptor = tls_builder.build();
     Ok(acceptor)
