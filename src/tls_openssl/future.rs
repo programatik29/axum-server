@@ -130,7 +130,7 @@ where
                         );
 
                         // Change to poll::ready(err)
-                        let ssl = Ssl::new(server_config.acceptor.context()).unwrap();
+                        let ssl = Ssl::new(server_config.get_inner().context()).unwrap();
 
                         let tls_stream = SslStream::new(ssl, stream).unwrap();
                         let future = TlsAccept {

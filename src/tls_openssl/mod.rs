@@ -31,8 +31,12 @@ use crate::{
     accept::{Accept, DefaultAcceptor},
     server::Server,
 };
-use openssl::ssl::Error as OpenSSLError;
-use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod};
+use arc_swap::ArcSwap;
+use openssl::{
+    pkey::PKey,
+    ssl::{Error as OpenSSLError, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod},
+    x509::X509,
+};
 use std::{convert::TryFrom, fmt, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
@@ -110,46 +114,103 @@ impl<A> fmt::Debug for OpenSSLAcceptor<A> {
 /// OpenSSL configuration.
 #[derive(Clone)]
 pub struct OpenSSLConfig {
-    acceptor: Arc<SslAcceptor>,
+    acceptor: Arc<ArcSwap<SslAcceptor>>,
 }
 
 impl OpenSSLConfig {
-    /// This helper will established a TLS server based on strong cipher suites
-    /// from a PEM formatted certificate and key.
-    pub fn from_pem_file<A: AsRef<Path>, B: AsRef<Path>>(
-        cert: A,
-        key: B,
-    ) -> Result<Self, OpenSSLError> {
-        let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+    /// Create config from `Arc<`[`SslAcceptor`]`>`.
+    pub fn from_acceptor(acceptor: Arc<SslAcceptor>) -> Self {
+        let acceptor = Arc::new(ArcSwap::new(acceptor));
 
-        tls_builder.set_certificate_file(cert, SslFiletype::PEM)?;
+        OpenSSLConfig { acceptor }
+    }
 
-        tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
-
-        tls_builder.check_private_key()?;
-
-        let acceptor = Arc::new(tls_builder.build());
+    /// This helper will establish a TLS server based on strong cipher suites
+    /// from a DER-encoded certificate and key.
+    pub fn from_der(cert: &[u8], key: &[u8]) -> Result<Self, OpenSSLError> {
+        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_der(cert, key)?));
 
         Ok(OpenSSLConfig { acceptor })
     }
 
-    /// This helper will established a TLS server based on strong cipher suites
-    /// from a PEM formatted certificate chain and key.
-    pub fn from_pem_chain_file<A: AsRef<Path>, B: AsRef<Path>>(
-        chain: A,
-        key: B,
-    ) -> Result<Self, OpenSSLError> {
-        let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
-
-        tls_builder.set_certificate_chain_file(chain)?;
-
-        tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
-
-        tls_builder.check_private_key()?;
-
-        let acceptor = Arc::new(tls_builder.build());
+    /// This helper will establish a TLS server based on strong cipher suites
+    /// from a PEM-formatted certificate and key.
+    pub fn from_pem(cert: &[u8], key: &[u8]) -> Result<Self, OpenSSLError> {
+        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_pem(cert, key)?));
 
         Ok(OpenSSLConfig { acceptor })
+    }
+
+    /// This helper will establish a TLS server based on strong cipher suites
+    /// from a PEM-formatted certificate and key.
+    pub fn from_pem_file(
+        cert: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+    ) -> Result<Self, OpenSSLError> {
+        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_pem_file(cert, key)?));
+
+        Ok(OpenSSLConfig { acceptor })
+    }
+
+    /// This helper will establish a TLS server based on strong cipher suites
+    /// from a PEM-formatted certificate chain and key.
+    pub fn from_pem_chain_file(
+        chain: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+    ) -> Result<Self, OpenSSLError> {
+        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_pem_chain_file(chain, key)?));
+
+        Ok(OpenSSLConfig { acceptor })
+    }
+
+    /// Get inner `Arc<`[`SslAcceptor`]`>`.
+    pub fn get_inner(&self) -> Arc<SslAcceptor> {
+        self.acceptor.load_full()
+    }
+
+    /// Reload acceptor from `Arc<`[`SslAcceptor`]`>`.
+    pub fn reload_from_acceptor(&self, acceptor: Arc<SslAcceptor>) {
+        self.acceptor.store(acceptor);
+    }
+
+    /// Reload acceptor from a DER-encoded certificate and key.
+    pub fn reload_from_der(&self, cert: &[u8], key: &[u8]) -> Result<(), OpenSSLError> {
+        let acceptor = Arc::new(config_from_der(cert, key)?);
+        self.acceptor.store(acceptor);
+
+        Ok(())
+    }
+
+    /// Reload acceptor from a PEM-formatted certificate and key.
+    pub fn reload_from_pem(&self, cert: &[u8], key: &[u8]) -> Result<(), OpenSSLError> {
+        let acceptor = Arc::new(config_from_pem(cert, key)?);
+        self.acceptor.store(acceptor);
+
+        Ok(())
+    }
+
+    /// Reload acceptor from a PEM-formatted certificate and key.
+    pub fn reload_from_pem_file(
+        &self,
+        cert: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+    ) -> Result<(), OpenSSLError> {
+        let acceptor = Arc::new(config_from_pem_file(cert, key)?);
+        self.acceptor.store(acceptor);
+
+        Ok(())
+    }
+
+    /// Reload acceptor from a PEM-formatted certificate chain and key.
+    pub fn reload_from_pem_chain_file(
+        &self,
+        chain: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+    ) -> Result<(), OpenSSLError> {
+        let acceptor = Arc::new(config_from_pem_chain_file(chain, key)?);
+        self.acceptor.store(acceptor);
+
+        Ok(())
     }
 }
 
@@ -180,7 +241,7 @@ impl TryFrom<SslAcceptorBuilder> for OpenSSLConfig {
         // Any other checks?
         tls_builder.check_private_key()?;
 
-        let acceptor = Arc::new(tls_builder.build());
+        let acceptor = Arc::new(ArcSwap::from_pointee(tls_builder.build()));
 
         Ok(OpenSSLConfig { acceptor })
     }
@@ -190,6 +251,58 @@ impl fmt::Debug for OpenSSLConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OpenSSLConfig").finish()
     }
+}
+
+fn config_from_der(cert: &[u8], key: &[u8]) -> Result<SslAcceptor, OpenSSLError> {
+    let cert = X509::from_der(cert)?;
+    let key = PKey::private_key_from_der(key)?;
+
+    let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+    tls_builder.set_certificate(&cert)?;
+    tls_builder.set_private_key(&key)?;
+    tls_builder.check_private_key()?;
+
+    let acceptor = tls_builder.build();
+    Ok(acceptor)
+}
+
+fn config_from_pem(cert: &[u8], key: &[u8]) -> Result<SslAcceptor, OpenSSLError> {
+    let cert = X509::from_pem(cert)?;
+    let key = PKey::private_key_from_pem(key)?;
+
+    let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+    tls_builder.set_certificate(&cert)?;
+    tls_builder.set_private_key(&key)?;
+    tls_builder.check_private_key()?;
+
+    let acceptor = tls_builder.build();
+    Ok(acceptor)
+}
+
+fn config_from_pem_file(
+    cert: impl AsRef<Path>,
+    key: impl AsRef<Path>,
+) -> Result<SslAcceptor, OpenSSLError> {
+    let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+    tls_builder.set_certificate_file(cert, SslFiletype::PEM)?;
+    tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
+    tls_builder.check_private_key()?;
+
+    let acceptor = tls_builder.build();
+    Ok(acceptor)
+}
+
+fn config_from_pem_chain_file(
+    chain: impl AsRef<Path>,
+    key: impl AsRef<Path>,
+) -> Result<SslAcceptor, OpenSSLError> {
+    let mut tls_builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+    tls_builder.set_certificate_chain_file(chain)?;
+    tls_builder.set_private_key_file(key, SslFiletype::PEM)?;
+    tls_builder.check_private_key()?;
+
+    let acceptor = tls_builder.build();
+    Ok(acceptor)
 }
 
 #[cfg(test)]
@@ -209,7 +322,10 @@ mod tests {
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tower::{Service, ServiceExt};
 
-    use openssl::ssl::{Ssl, SslConnector, SslMethod, SslVerifyMode};
+    use openssl::{
+        ssl::{Ssl, SslConnector, SslMethod, SslVerifyMode},
+        x509::X509,
+    };
     use std::pin::Pin;
     use tokio_openssl::SslStream;
 
@@ -222,6 +338,59 @@ mod tests {
         let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_reload() {
+        let handle = Handle::new();
+
+        let config = OpenSSLConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .unwrap();
+
+        let server_handle = handle.clone();
+        let openssl_config = config.clone();
+        tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            tls_openssl::bind_openssl(addr, openssl_config)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        let cert_a = get_first_cert(addr).await;
+        let mut cert_b = get_first_cert(addr).await;
+
+        assert_eq!(cert_a, cert_b);
+
+        config
+            .reload_from_pem_file(
+                "examples/self-signed-certs/reload/cert.pem",
+                "examples/self-signed-certs/reload/key.pem",
+            )
+            .unwrap();
+
+        cert_b = get_first_cert(addr).await;
+
+        assert_ne!(cert_a, cert_b);
+
+        config
+            .reload_from_pem_file(
+                "examples/self-signed-certs/cert.pem",
+                "examples/self-signed-certs/key.pem",
+            )
+            .unwrap();
+
+        cert_b = get_first_cert(addr).await;
+
+        assert_eq!(cert_a, cert_b);
     }
 
     #[tokio::test]
@@ -318,6 +487,13 @@ mod tests {
         let addr = handle.listening().await.unwrap();
 
         (handle, server_task, addr)
+    }
+
+    async fn get_first_cert(addr: SocketAddr) -> X509 {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let tls_stream = tls_connector(dns_name(), stream).await;
+
+        tls_stream.ssl().peer_certificate().unwrap()
     }
 
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
