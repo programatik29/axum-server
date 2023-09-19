@@ -284,12 +284,21 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
     use rustls_pemfile::Item;
 
     let cert = rustls_pemfile::certs(&mut cert.as_ref())?;
-    let key = match rustls_pemfile::read_one(&mut key.as_ref())? {
-        Some(Item::RSAKey(key)) | Some(Item::PKCS8Key(key)) | Some(Item::ECKey(key)) => key,
-        _ => return Err(io_other("private key format not supported")),
-    };
+    // Check the entire PEM file for the key in case it is not first section
+    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())?
+        .into_iter()
+        .filter_map(|i| match i {
+            Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) => Some(key),
+            _ => None,
+        })
+        .collect();
 
-    config_from_der(cert, key)
+    // Make sure file contains only one key
+    if key_vec.len() != 1 {
+        return Err(io_other("private key format not supported"));
+    }
+
+    config_from_der(cert, key_vec.pop().unwrap())
 }
 
 async fn config_from_pem_file(
