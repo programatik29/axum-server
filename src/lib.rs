@@ -124,3 +124,7 @@ pub mod tls_openssl;
 #[doc(inline)]
 #[cfg(feature = "tls-openssl")]
 pub use self::tls_openssl::bind_openssl;
+
+#[cfg(feature = "proxy-protocol")]
+#[cfg_attr(docsrs, doc(cfg(feature = "proxy_protocol")))]
+pub mod proxy_protocol;

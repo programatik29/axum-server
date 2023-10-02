@@ -1,3 +1,5 @@
+#[cfg(feature = "proxy-protocol")]
+use crate::proxy_protocol::{read_proxy_header, ForwardClientAddress};
 use crate::{
     accept::{Accept, DefaultAcceptor},
     addr_incoming_config::AddrIncomingConfig,
@@ -29,6 +31,8 @@ pub struct Server<A = DefaultAcceptor> {
     addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
     http_conf: HttpConfig,
+    #[cfg(feature = "proxy-protocol")]
+    proxy_protocol_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -59,6 +63,8 @@ impl Server {
             addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
+            #[cfg(feature = "proxy-protocol")]
+            proxy_protocol_enabled: false,
         }
     }
 
@@ -73,6 +79,8 @@ impl Server {
             addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
+            #[cfg(feature = "proxy-protocol")]
+            proxy_protocol_enabled: false,
         }
     }
 }
@@ -86,7 +94,16 @@ impl<A> Server<A> {
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
+            #[cfg(feature = "proxy-protocol")]
+            proxy_protocol_enabled: self.proxy_protocol_enabled,
         }
+    }
+
+    #[cfg(feature = "proxy-protocol")]
+    /// Enable or disable proxy protocol header parsing.
+    pub fn proxy_protocol_enabled(mut self, enabled: bool) -> Self {
+        self.proxy_protocol_enabled = enabled;
+        self
     }
 
     /// Map acceptor.
@@ -100,6 +117,8 @@ impl<A> Server<A> {
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
+            #[cfg(feature = "proxy-protocol")]
+            proxy_protocol_enabled: self.proxy_protocol_enabled,
         }
     }
 
