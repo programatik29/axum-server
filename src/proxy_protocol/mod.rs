@@ -206,27 +206,27 @@ where
 
 pub struct ProxyProtocolAcceptor<A> {
     inner: A,
-    parsing_timeout: Duration,
+    job_timeout: Duration,
 }
 
 impl<A> ProxyProtocolAcceptor<A> {
     pub fn new(inner: A) -> Self {
         #[cfg(not(test))]
-        let parsing_timeout = Duration::from_secs(10);
+        let job_timeout = Duration::from_secs(10);
 
         // Don't force tests to wait too long.
         #[cfg(test)]
-        let parsing_timeout = Duration::from_secs(1);
+        let job_timeout = Duration::from_secs(1);
 
         Self {
             inner,
-            parsing_timeout,
+            job_timeout,
         }
     }
 
     /// Override the default Proxy Header parsing timeout of 10 seconds, except during testing.
-    pub fn parsing_timeout(mut self, val: Duration) -> Self {
-        self.parsing_timeout = val;
+    pub fn job_timeout(mut self, val: Duration) -> Self {
+        self.job_timeout = val;
         self
     }
 }
@@ -236,7 +236,7 @@ impl<A> ProxyProtocolAcceptor<A> {
     pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
         ProxyProtocolAcceptor {
             inner: acceptor,
-            parsing_timeout: self.parsing_timeout,
+            job_timeout: self.job_timeout,
         }
     }
 }
@@ -251,7 +251,8 @@ where
     type Future = ProxyProtocolAcceptorFuture<A::Future, A::Stream, ForwardClientIp<A::Service>>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
-        ProxyProtocolAcceptorFuture::new(self.inner, stream, service, self.parsing_timeout)
+        ProxyProtocolAcceptorFuture::new(self.inner, stream, service)
+        // ProxyProtocolAcceptorFuture::new(self.inner, stream, service, self.job_timeout)
     }
 }
 
