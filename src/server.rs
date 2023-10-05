@@ -1,5 +1,5 @@
 #[cfg(feature = "proxy-protocol")]
-use crate::proxy_protocol::{read_proxy_header, ForwardClientAddress};
+use crate::proxy_protocol::ProxyProtocolAcceptor;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     addr_incoming_config::AddrIncomingConfig,
@@ -18,6 +18,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
 };
+
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpListener,
@@ -31,8 +32,6 @@ pub struct Server<A = DefaultAcceptor> {
     addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
     http_conf: HttpConfig,
-    #[cfg(feature = "proxy-protocol")]
-    proxy_protocol_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -63,8 +62,6 @@ impl Server {
             addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
-            #[cfg(feature = "proxy-protocol")]
-            proxy_protocol_enabled: false,
         }
     }
 
@@ -79,8 +76,6 @@ impl Server {
             addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
             http_conf: HttpConfig::default(),
-            #[cfg(feature = "proxy-protocol")]
-            proxy_protocol_enabled: false,
         }
     }
 }
@@ -94,16 +89,22 @@ impl<A> Server<A> {
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
-            #[cfg(feature = "proxy-protocol")]
-            proxy_protocol_enabled: self.proxy_protocol_enabled,
         }
     }
 
     #[cfg(feature = "proxy-protocol")]
-    /// Enable or disable proxy protocol header parsing.
-    pub fn proxy_protocol_enabled(mut self, enabled: bool) -> Self {
-        self.proxy_protocol_enabled = enabled;
-        self
+    /// Enable proxy protocol header parsing.
+    /// Note has to be called after initial acceptor is set.
+    pub fn proxy_protocol_enabled(mut self) -> Server<ProxyProtocolAcceptor<A>> {
+        let initial_acceptor = self.acceptor;
+        let acceptor = ProxyProtocolAcceptor::new(initial_acceptor);
+        Server {
+            acceptor,
+            listener: self.listener,
+            addr_incoming_conf: self.addr_incoming_conf,
+            handle: self.handle,
+            http_conf: self.http_conf,
+        }
     }
 
     /// Map acceptor.
@@ -117,8 +118,6 @@ impl<A> Server<A> {
             addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
             http_conf: self.http_conf,
-            #[cfg(feature = "proxy-protocol")]
-            proxy_protocol_enabled: self.proxy_protocol_enabled,
         }
     }
 
@@ -177,8 +176,6 @@ impl<A> Server<A> {
         let addr_incoming_conf = self.addr_incoming_conf;
         let handle = self.handle;
         let http_conf = self.http_conf;
-        #[cfg(feature = "proxy-protocol")]
-        let proxy_protocol_enabled = self.proxy_protocol_enabled;
 
         let mut incoming = match bind_incoming(self.listener, addr_incoming_conf).await {
             Ok(v) => v,
@@ -192,14 +189,7 @@ impl<A> Server<A> {
 
         let accept_loop_future = async {
             loop {
-                #[cfg(not(feature = "proxy-protocol"))]
                 let addr_stream = tokio::select! {
-                    biased;
-                    result = accept(&mut incoming) => result?,
-                    _ = handle.wait_graceful_shutdown() => return Ok(()),
-                };
-                #[cfg(feature = "proxy-protocol")]
-                let mut addr_stream = tokio::select! {
                     biased;
                     result = accept(&mut incoming) => result?,
                     _ = handle.wait_graceful_shutdown() => return Ok(()),
@@ -217,18 +207,6 @@ impl<A> Server<A> {
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
                 let http_conf = http_conf.clone();
-
-                #[cfg(feature = "proxy-protocol")]
-                if proxy_protocol_enabled {
-                    let client_address_opt = match read_proxy_header(&mut addr_stream).await {
-                        Ok(client_address) => Some(client_address),
-                        Err(_error) => None,
-                    };
-                    service = ForwardClientAddress {
-                        inner: service,
-                        address: client_address_opt,
-                    };
-                }
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
