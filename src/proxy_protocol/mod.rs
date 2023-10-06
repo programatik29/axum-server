@@ -37,17 +37,17 @@ use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::task::Context;
 use std::task::Poll;
+use std::time::Duration;
 
 use http::HeaderValue;
 use http::Request;
 use ppp::{v2, HeaderResult, PartialResult};
 use tokio::io::AsyncReadExt;
 use tokio::io::ReadBuf;
-use tokio::time::{timeout, Duration};
 use tower_service::Service;
 
-use crate::accept::{Accept, DefaultAcceptor};
-use std::{fmt, net::SocketAddr};
+use crate::accept::Accept;
+use std::fmt;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod future;

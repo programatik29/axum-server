@@ -1,10 +1,7 @@
 //! Future types.
 use crate::accept::Accept;
-use crate::proxy_protocol::Peekable;
-use crate::proxy_protocol::{read_proxy_header, ForwardClientIp};
+use crate::proxy_protocol::{read_proxy_header, ForwardClientIp, Peekable};
 use pin_project_lite::pin_project;
-use std::io::{Error, ErrorKind};
-use std::time::Duration;
 use std::{
     fmt,
     future::Future,
@@ -14,11 +11,10 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::time::{timeout, Timeout};
 
 pin_project! {
     /// Future type for [`ProxyProtocolAcceptor`](crate::proxy_protocol::ProxyProtocolAcceptor).
-    pub struct ProxyProtocolAcceptorFuture<A, I, S> {
+    pub struct ProxyProtocolAcceptorFuture<A: Accept<I, S>, I, S> {
         #[pin]
         inner: AcceptFuture<A, I, S>,
     }
@@ -54,7 +50,7 @@ where
 
 pin_project! {
     #[project = AcceptFutureProj]
-    enum AcceptFuture<A, I, S> {
+    enum AcceptFuture<A: Accept<I, S>, I, S> {
         ReadHeader {
             acceptor: A,
             stream: I,
