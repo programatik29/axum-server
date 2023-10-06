@@ -206,6 +206,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct ProxyProtocolAcceptor<A> {
     inner: A,
     job_timeout: Duration,
@@ -245,7 +246,7 @@ impl<A> ProxyProtocolAcceptor<A> {
 
 impl<A, I, S> Accept<I, S> for ProxyProtocolAcceptor<A>
 where
-    A: Accept<I, S>,
+    A: Accept<I, S> + Clone,
     A::Stream: AsyncRead + AsyncWrite + Unpin,
     I: AsyncRead + AsyncWrite + Unpin + Peekable + Send + 'static,
 {
@@ -257,8 +258,8 @@ where
         // TODO: wrap in timeout
 
         let read_header_future = Box::pin(read_proxy_header(&mut stream));
-
-        ProxyProtocolAcceptorFuture::new(read_header_future, self.inner, stream, service)
+        let inner_acceptor = self.inner.clone();
+        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, stream, service)
     }
 }
 

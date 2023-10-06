@@ -33,8 +33,8 @@ where
         let inner = AcceptFuture::ReadHeader {
             read_header_future,
             acceptor,
-            stream,
-            service,
+            stream: Some(stream),
+            service: Some(service),
         };
         Self { inner }
     }
@@ -61,8 +61,8 @@ pin_project! {
             #[pin]
             read_header_future: F,
             acceptor: A,
-            stream: I,
-            service: S,
+            stream: Option<I>,
+            service: Option<S>,
         },
         ForwardIp {
             #[pin]
@@ -94,8 +94,9 @@ where
                     Poll::Ready(Ok(client_address)) => {
                         let client_address_opt = Some(client_address);
 
-                        let inner_accept_future = acceptor.accept(*stream, *service);
-
+                        let stream = stream.take().expect("future polled after ready");
+                        let service = service.take().expect("future polled after ready");
+                        let inner_accept_future = acceptor.accept(stream, service);
                         this.inner.set(AcceptFuture::ForwardIp {
                             inner_accept_future,
                             client_address_opt,
@@ -104,8 +105,9 @@ where
                     Poll::Ready(Err(_)) => {
                         let client_address_opt = None;
 
-                        let inner_accept_future = acceptor.accept(*stream, *service);
-
+                        let stream = stream.take().expect("future polled after ready");
+                        let service = service.take().expect("future polled after ready");
+                        let inner_accept_future = acceptor.accept(stream, service);
                         this.inner.set(AcceptFuture::ForwardIp {
                             inner_accept_future,
                             client_address_opt,
