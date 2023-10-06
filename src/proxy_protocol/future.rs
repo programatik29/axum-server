@@ -65,8 +65,7 @@ pin_project! {
             service: S,
         },
         InnerAccept {
-            #[pin]
-            read_header_future: Box<dyn Future<Output = Result<IpAddr, io::Error>>>,
+            read_header_future: Pin<Box<dyn Future<Output = Result<IpAddr, io::Error>>>>,
             acceptor: A,
             stream: I,
             service: S,
@@ -96,7 +95,7 @@ where
                     stream,
                     service,
                 } => {
-                    let read_header_future = read_proxy_header(stream);
+                    let read_header_future = Box::pin(read_proxy_header(stream));
 
                     this.inner.set(AcceptFuture::InnerAccept {
                         read_header_future,
@@ -111,7 +110,7 @@ where
                     stream,
                     service,
                 } => {
-                    let client_address_opt = match Pin::as_mut(&mut read_header_future).poll(cx) {
+                    let client_address_opt = match read_header_future.as_mut().poll(cx) {
                         Poll::Ready(Ok(client_address)) => Some(client_address),
                         Poll::Ready(Err(_)) => None,
                         Poll::Pending => return Poll::Pending,
