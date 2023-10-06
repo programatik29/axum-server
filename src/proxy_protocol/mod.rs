@@ -244,11 +244,12 @@ impl<A> ProxyProtocolAcceptor<A> {
 impl<A, I, S> Accept<I, S> for ProxyProtocolAcceptor<A>
 where
     A: Accept<I, S>,
-    A::Stream: AsyncRead + AsyncWrite + Unpin + Peekable,
+    A::Stream: AsyncRead + AsyncWrite + Unpin,
+    I: AsyncRead + AsyncWrite + Unpin + Peekable,
 {
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;
-    type Future = ProxyProtocolAcceptorFuture<A::Future, A::Stream, ForwardClientIp<A::Service>>;
+    type Future = ProxyProtocolAcceptorFuture<A, I, S>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
         ProxyProtocolAcceptorFuture::new(self.inner, stream, service)
