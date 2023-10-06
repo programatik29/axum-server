@@ -1,6 +1,6 @@
 //! Future types.
 use crate::accept::Accept;
-use crate::proxy_protocol::{read_proxy_header, ForwardClientIp, Peekable};
+use crate::proxy_protocol::{ForwardClientIp, Peekable};
 use pin_project_lite::pin_project;
 use std::{
     fmt,
@@ -14,35 +14,33 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pin_project! {
     /// Future type for [`ProxyProtocolAcceptor`](crate::proxy_protocol::ProxyProtocolAcceptor).
-    pub struct ProxyProtocolAcceptorFuture<A, I, S>
+    pub struct ProxyProtocolAcceptorFuture<F, A, I, S>
     where
         A: Accept<I, S>,
         I: Peekable,
     {
         #[pin]
-        inner: AcceptFuture<A, I, S>,
+        inner: AcceptFuture<F, A, I, S>,
     }
 }
 
-impl<A, I, S> ProxyProtocolAcceptorFuture<A, I, S>
+impl<F, A, I, S> ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable,
+    I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
 {
-    pub(crate) fn new(inner_acceptor: A, inner_stream: I, inner_service: S) -> Self {
-        // use timeout to wrap whole job
-
+    pub(crate) fn new(read_header_future: F, acceptor: A, stream: I, service: S) -> Self {
         let inner = AcceptFuture::ReadHeader {
-            acceptor: inner_acceptor,
-            stream: inner_stream,
-            service: inner_service,
+            read_header_future,
+            acceptor,
+            stream,
+            service,
         };
-
         Self { inner }
     }
 }
 
-impl<A, I, S> fmt::Debug for ProxyProtocolAcceptorFuture<A, I, S>
+impl<F, A, I, S> fmt::Debug for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
     I: AsyncRead + AsyncWrite + Unpin + Peekable,
@@ -54,18 +52,14 @@ where
 
 pin_project! {
     #[project = AcceptFutureProj]
-    enum AcceptFuture<A, I, S>
+    enum AcceptFuture<F, A, I, S>
     where
         A: Accept<I, S>,
         I: Peekable,
     {
         ReadHeader {
-            acceptor: A,
-            stream: I,
-            service: S,
-        },
-        InnerAccept {
-            read_header_future: Pin<Box<dyn Future<Output = Result<IpAddr, io::Error>>>>,
+            #[pin]
+            read_header_future: F,
             acceptor: A,
             stream: I,
             service: S,
@@ -78,10 +72,11 @@ pin_project! {
     }
 }
 
-impl<A, I, S> Future for ProxyProtocolAcceptorFuture<A, I, S>
+impl<F, A, I, S> Future for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable,
+    I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
+    F: Future<Output = Result<IpAddr, io::Error>>,
 {
     type Output = io::Result<(A::Stream, ForwardClientIp<A::Service>)>;
 
@@ -91,55 +86,48 @@ where
         loop {
             match this.inner.as_mut().project() {
                 AcceptFutureProj::ReadHeader {
-                    acceptor,
-                    stream,
-                    service,
-                } => {
-                    let read_header_future = Box::pin(read_proxy_header(stream));
-
-                    this.inner.set(AcceptFuture::InnerAccept {
-                        read_header_future,
-                        acceptor: *acceptor,
-                        stream: *stream,
-                        service: *service,
-                    });
-                }
-                AcceptFutureProj::InnerAccept {
                     read_header_future,
                     acceptor,
                     stream,
-                    service,
-                } => {
-                    let client_address_opt = match read_header_future.as_mut().poll(cx) {
-                        Poll::Ready(Ok(client_address)) => Some(client_address),
-                        Poll::Ready(Err(_)) => None,
-                        Poll::Pending => return Poll::Pending,
-                    };
+                    service
+                } => match read_header_future.poll(cx) {
+                    Poll::Ready(Ok(client_address)) => {
+                        let client_address_opt = Some(client_address);
 
-                    let inner_accept_future = acceptor.accept(*stream, *service);
+                        let inner_accept_future = acceptor.accept(*stream, *service);
 
-                    this.inner.set(AcceptFuture::ForwardIp {
-                        inner_accept_future,
-                        client_address_opt,
-                    });
-                }
+                        this.inner.set(AcceptFuture::ForwardIp {
+                            inner_accept_future,
+                            client_address_opt,
+                        });
+                    }
+                    Poll::Ready(Err(_)) => {
+                        let client_address_opt = None;
+
+                        let inner_accept_future = acceptor.accept(*stream, *service);
+
+                        this.inner.set(AcceptFuture::ForwardIp {
+                            inner_accept_future,
+                            client_address_opt,
+                        });
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
                 AcceptFutureProj::ForwardIp {
                     inner_accept_future,
                     client_address_opt,
-                } => {
-                    match inner_accept_future.poll(cx) {
-                        Poll::Ready(Ok((stream, service))) => {
-                            let service = ForwardClientIp {
-                                inner: service,
-                                client_address_opt: *client_address_opt,
-                            };
+                } => match inner_accept_future.poll(cx) {
+                    Poll::Ready(Ok((stream, service))) => {
+                        let service = ForwardClientIp {
+                            inner: service,
+                            client_address_opt: *client_address_opt,
+                        };
 
-                            return Poll::Ready(Ok((stream, service)));
-                        }
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                        Poll::Pending => return Poll::Pending,
+                        return Poll::Ready(Ok((stream, service)));
                     }
-                }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Pending => return Poll::Pending,
+                },
             }
         }
     }

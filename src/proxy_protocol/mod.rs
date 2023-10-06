@@ -38,6 +38,8 @@ use std::net::IpAddr;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
+use std::future::Future;
+use std::pin::Pin;
 
 use http::HeaderValue;
 use http::Request;
@@ -245,15 +247,18 @@ impl<A, I, S> Accept<I, S> for ProxyProtocolAcceptor<A>
 where
     A: Accept<I, S>,
     A::Stream: AsyncRead + AsyncWrite + Unpin,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable,
+    I: AsyncRead + AsyncWrite + Unpin + Peekable + Send + 'static,
 {
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;
-    type Future = ProxyProtocolAcceptorFuture<A, I, S>;
+    type Future = ProxyProtocolAcceptorFuture<Pin<Box<dyn Future<Output = Result<IpAddr, io::Error>> + Send>>, A, I, S>;
 
-    fn accept(&self, stream: I, service: S) -> Self::Future {
-        ProxyProtocolAcceptorFuture::new(self.inner, stream, service)
-        // ProxyProtocolAcceptorFuture::new(self.inner, stream, service, self.job_timeout)
+    fn accept(&self, mut stream: I, service: S) -> Self::Future {
+        // TODO: wrap in timeout
+
+        let read_header_future = Box::pin(read_proxy_header(&mut stream));
+
+        ProxyProtocolAcceptorFuture::new(read_header_future, self.inner, stream, service)
     }
 }
 
