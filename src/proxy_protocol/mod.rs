@@ -33,7 +33,6 @@
 //! ```
 use std::future::poll_fn;
 use std::io;
-use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::task::Context;
 use std::task::Poll;
@@ -63,38 +62,14 @@ pub trait Peekable {
     ) -> Poll<std::io::Result<usize>>;
 }
 
-/// Parse and remove the PROXY protocol header from the front of the stream if it exists.
-///
-/// Attempts to read the PROXY header from the given `AddrStream`. If a valid header is detected,
-/// it is removed from the stream and the client's address (if present) is returned.
-///
-/// # Arguments:
-///
-/// * `stream`: The mutable reference to a `AddrStream` from which the PROXY header should be read.
-///
-/// # Returns:
-///
-/// A `Result<IpAddr, io::Error>` where:
-/// * `Ok(IpAddr)` indicates successful parsing of a valid PROXY header and contains the client's address.
-/// * `Err(io::Error)` indicates an error occurred during the parsing process. The error provides more details
-///   about the nature of the issue, such as timeout, invalid header format, unsupported version, etc.
-///
 /// Note: Currently only supports the V2 PROXY header format.
 /// See proxy header spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>
-pub(crate) async fn read_proxy_header<I>(stream: &mut I) -> Result<IpAddr, io::Error>
+pub(crate) async fn read_proxy_header<I>(mut stream: I) -> Result<(I, Option<IpAddr>), io::Error>
 where
     I: Peekable + AsyncRead + Unpin,
 {
     // Maximum expected size for PROXY header is
     // unlikely to be larger than 512 bytes unless additional fields are added.
-    // Maximum length if no additional fields is
-    //      12 (signature)
-    //    + 1 (version & command)
-    //    + 1 (Protocol & address family)
-    //    + 2 (length - combined length of address, port, and additional fields)
-    //    + 216 (UNIX)
-    //    = 232 bytes
-    // For IPv6 maximum is 12 + 1 + 1 + 2 + 54 = 70 bytes
     const BUFFER_SIZE: usize = 512;
     // Mutable buffer for storing the bytes received from the stream.
     let mut array_buffer = [0; BUFFER_SIZE];
@@ -110,40 +85,31 @@ where
         let header = HeaderResult::parse(buffer.filled());
 
         if header.is_complete() {
-            break Ok(header);
+            break header;
         } else if buffer.remaining() == 0 {
-            break Err(io::Error::new(io::ErrorKind::Other, "Buffer limit reached without finding a complete header. Consider increasing the buffer size."));
+            // Buffer limit reached without finding a complete header. Consider increasing the buffer size.
+            return Ok((stream, None))
         }
 
         buffer.clear();
-    }?;
+    };
 
     match header {
-        HeaderResult::V1(Ok(header)) => Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!(
-                "V1 PROXY header detected, which is not supported. Header: {:?}",
-                header
-            ),
-        )),
+        HeaderResult::V1(Ok(_header)) => {
+            // V1 PROXY header detected, which is not supported
+            Ok((stream, None))
+        }
         HeaderResult::V2(Ok(header)) => {
             let client_address = match header.addresses {
                 v2::Addresses::IPv4(ip) => IpAddr::V4(ip.source_address),
                 v2::Addresses::IPv6(ip) => IpAddr::V6(ip.source_address),
-                v2::Addresses::Unix(unix) => {
-                    return Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "Unix socket addresses are not supported. Addresses: {:?}",
-                            unix
-                        ),
-                    ));
+                v2::Addresses::Unix(_unix) => {
+                    // Unix socket addresses are not supported
+                    return Ok((stream, None))
                 }
                 v2::Addresses::Unspecified => {
-                    return Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        "V2 PROXY header addresses \"Unspecified\"",
-                    ));
+                    // V2 PROXY header addresses "Unspecified"
+                    return Ok((stream, None))
                 }
             };
 
@@ -153,22 +119,22 @@ where
                 .read_exact(&mut buffer.filled_mut()[..header_len])
                 .await?;
 
-            Ok(client_address)
+            Ok((stream, Some(client_address)))
         }
-        HeaderResult::V1(Err(error)) => Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("No valid V1 PROXY header received: {}", error),
-        )),
-        HeaderResult::V2(Err(error)) => Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!("No valid V2 PROXY header received: {}", error),
-        )),
+        HeaderResult::V1(Err(_error)) => {
+            // No valid V1 PROXY header received
+            Ok((stream, None))
+        }
+        HeaderResult::V2(Err(_error)) => {
+            // No valid V2 PROXY header received
+            Ok((stream, None))
+        }
     }
 }
 
 /// Middleware for adding client IP address to the request `forwarded` header.
 /// see spec: <https://www.rfc-editor.org/rfc/rfc7239#section-5.2>
-pub(crate) struct ForwardClientIp<S> {
+pub struct ForwardClientIp<S> {
     inner: S,
     client_address_opt: Option<IpAddr>,
 }
@@ -213,7 +179,7 @@ pub struct ProxyProtocolAcceptor<A> {
 }
 
 impl<A> ProxyProtocolAcceptor<A> {
-    pub fn new(inner: A) -> Self {
+    pub(crate) fn new(inner: A) -> Self {
         #[cfg(not(test))]
         let job_timeout = Duration::from_secs(10);
 
@@ -228,7 +194,7 @@ impl<A> ProxyProtocolAcceptor<A> {
     }
 
     /// Override the default Proxy Header parsing timeout of 10 seconds, except during testing.
-    pub fn job_timeout(mut self, val: Duration) -> Self {
+    pub(crate) fn job_timeout(mut self, val: Duration) -> Self {
         self.job_timeout = val;
         self
     }
@@ -236,7 +202,7 @@ impl<A> ProxyProtocolAcceptor<A> {
 
 impl<A> ProxyProtocolAcceptor<A> {
     /// Overwrite inner acceptor.
-    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
+    pub(crate) fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
         ProxyProtocolAcceptor {
             inner: acceptor,
             job_timeout: self.job_timeout,
@@ -252,14 +218,15 @@ where
 {
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;
-    type Future = ProxyProtocolAcceptorFuture<Pin<Box<dyn Future<Output = Result<IpAddr, io::Error>> + Send>>, A, I, S>;
+    type Future = ProxyProtocolAcceptorFuture<Pin<Box<dyn Future<Output = Result<(I, Option<IpAddr>), io::Error>> + Send>>, A, I, S>;
 
-    fn accept(&self, mut stream: I, service: S) -> Self::Future {
+    fn accept(&self, stream: I, service: S) -> Self::Future {
         // TODO: wrap in timeout
 
-        let read_header_future = Box::pin(read_proxy_header(&mut stream));
+        let read_header_future = Box::pin(read_proxy_header(stream));
         let inner_acceptor = self.inner.clone();
-        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, stream, service)
+
+        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, service)
     }
 }
 

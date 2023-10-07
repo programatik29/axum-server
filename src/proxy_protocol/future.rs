@@ -29,11 +29,10 @@ where
     A: Accept<I, S>,
     I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
 {
-    pub(crate) fn new(read_header_future: F, acceptor: A, stream: I, service: S) -> Self {
+    pub(crate) fn new(read_header_future: F, acceptor: A, service: S) -> Self {
         let inner = AcceptFuture::ReadHeader {
             read_header_future,
             acceptor,
-            stream: Some(stream),
             service: Some(service),
         };
         Self { inner }
@@ -61,7 +60,6 @@ pin_project! {
             #[pin]
             read_header_future: F,
             acceptor: A,
-            stream: Option<I>,
             service: Option<S>,
         },
         ForwardIp {
@@ -76,7 +74,7 @@ impl<F, A, I, S> Future for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
     I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
-    F: Future<Output = Result<IpAddr, io::Error>>,
+    F: Future<Output = Result<(I, Option<IpAddr>), io::Error>>,
 {
     type Output = io::Result<(A::Stream, ForwardClientIp<A::Service>)>;
 
@@ -88,31 +86,19 @@ where
                 AcceptFutureProj::ReadHeader {
                     read_header_future,
                     acceptor,
-                    stream,
                     service
                 } => match read_header_future.poll(cx) {
-                    Poll::Ready(Ok(client_address)) => {
-                        let client_address_opt = Some(client_address);
+                    Poll::Ready(Ok((stream, client_address_opt))) => {
 
-                        let stream = stream.take().expect("future polled after ready");
                         let service = service.take().expect("future polled after ready");
                         let inner_accept_future = acceptor.accept(stream, service);
+
                         this.inner.set(AcceptFuture::ForwardIp {
                             inner_accept_future,
                             client_address_opt,
                         });
                     }
-                    Poll::Ready(Err(_)) => {
-                        let client_address_opt = None;
-
-                        let stream = stream.take().expect("future polled after ready");
-                        let service = service.take().expect("future polled after ready");
-                        let inner_accept_future = acceptor.accept(stream, service);
-                        this.inner.set(AcceptFuture::ForwardIp {
-                            inner_accept_future,
-                            client_address_opt,
-                        });
-                    }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     Poll::Pending => return Poll::Pending,
                 },
                 AcceptFutureProj::ForwardIp {
