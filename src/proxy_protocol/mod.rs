@@ -1,44 +1,36 @@
 //! The PROXY protocol header compatibility.
 //! See spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>
 //!
-//! Note: if you are setting a custom acceptor, `proxy_protocol_enabled` must be called afterwards.
+//! Note: if you are setting a custom acceptor, `proxy_protocol_enabled` must be called after this is set.
 //! Safest to use directly before serve when all options are configured.
 //!
 //! # Example
 //!
 //! ```rust,no_run
 //! use axum::{routing::get, Router};
-//! use axum_server::tls_rustls::RustlsConfig;
 //! use std::net::SocketAddr;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+//!    let app = Router::new().route("/", get(|| async { "Hello, world!" }));
 //!
-//!     let config = RustlsConfig::from_pem_file(
-//!         "examples/self-signed-certs/cert.pem",
-//!         "examples/self-signed-certs/key.pem",
-//!     )
-//!     .await
-//!     .unwrap();
-//!
-//!     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-//!     println!("listening on {}", addr);
-//!     axum_server::bind_rustls(addr, config)
-//!         .proxy_protocol_enabled()
-//!         .serve(app.into_make_service())
-//!         .await
-//!         .unwrap();
+//!    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+//!    println!("listening on {}", addr);
+//!    axum_server::bind(addr)
+//!        .proxy_protocol_enabled()
+//!        .serve(app.into_make_service())
+//!        .await
+//!        .unwrap();
 //! }
 //! ```
 use std::future::poll_fn;
+use std::future::Future;
 use std::io;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
-use std::future::Future;
-use std::pin::Pin;
 
 use http::HeaderValue;
 use http::Request;
@@ -88,7 +80,7 @@ where
             break header;
         } else if buffer.remaining() == 0 {
             // Buffer limit reached without finding a complete header. Consider increasing the buffer size.
-            return Ok((stream, None))
+            return Ok((stream, None));
         }
 
         buffer.clear();
@@ -105,11 +97,11 @@ where
                 v2::Addresses::IPv6(ip) => IpAddr::V6(ip.source_address),
                 v2::Addresses::Unix(_unix) => {
                     // Unix socket addresses are not supported
-                    return Ok((stream, None))
+                    return Ok((stream, None));
                 }
                 v2::Addresses::Unspecified => {
                     // V2 PROXY header addresses "Unspecified"
-                    return Ok((stream, None))
+                    return Ok((stream, None));
                 }
             };
 
@@ -219,21 +211,64 @@ where
 {
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;
-    type Future = ProxyProtocolAcceptorFuture<Pin<Box<dyn Future<Output = Result<(I, Option<IpAddr>), io::Error>> + Send>>, A, I, S>;
+    type Future = ProxyProtocolAcceptorFuture<
+        Pin<Box<dyn Future<Output = Result<(I, Option<IpAddr>), io::Error>> + Send>>,
+        A,
+        I,
+        S,
+    >;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
-        // TODO: wrap in timeout
-
         let read_header_future = Box::pin(read_proxy_header(stream));
         let inner_acceptor = self.inner.clone();
         let parsing_timeout = self.parsing_timeout;
 
-        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, service, parsing_timeout)
+        ProxyProtocolAcceptorFuture::new(
+            read_header_future,
+            inner_acceptor,
+            service,
+            parsing_timeout,
+        )
     }
 }
 
 impl<A> fmt::Debug for ProxyProtocolAcceptor<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyProtocolAcceptor").finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{handle::Handle, server::Server};
+    use axum::{routing::get, Router};
+    use bytes::Bytes;
+    use http::{response, Request};
+    use hyper::{
+        client::conn::{handshake, SendRequest},
+        Body,
+    };
+    use std::{io, net::SocketAddr, time::Duration};
+    use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+    use tower::{Service, ServiceExt};
+
+    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        (handle, server_task, addr)
     }
 }

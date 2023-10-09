@@ -109,15 +109,13 @@ where
                         acceptor,
                         service: Some(service),
                     });
-
-                },
+                }
                 AcceptFutureProj::ReadHeader {
                     future,
                     acceptor,
                     service,
                 } => match future.poll(cx) {
                     Poll::Ready(Ok(Ok((stream, client_address_opt)))) => {
-
                         let service = service.take().expect("future polled after ready");
                         let future = acceptor.accept(stream, service);
 
