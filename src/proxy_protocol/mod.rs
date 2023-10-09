@@ -176,27 +176,27 @@ where
 #[derive(Clone)]
 pub struct ProxyProtocolAcceptor<A> {
     inner: A,
-    job_timeout: Duration,
+    parsing_timeout: Duration,
 }
 
 impl<A> ProxyProtocolAcceptor<A> {
     pub(crate) fn new(inner: A) -> Self {
         #[cfg(not(test))]
-        let job_timeout = Duration::from_secs(10);
+        let parsing_timeout = Duration::from_secs(10);
 
         // Don't force tests to wait too long.
         #[cfg(test)]
-        let job_timeout = Duration::from_secs(1);
+        let parsing_timeout = Duration::from_secs(1);
 
         Self {
             inner,
-            job_timeout,
+            parsing_timeout,
         }
     }
 
     /// Override the default Proxy Header parsing timeout of 10 seconds, except during testing.
-    pub fn job_timeout(mut self, val: Duration) -> Self {
-        self.job_timeout = val;
+    pub fn parsing_timeout(mut self, val: Duration) -> Self {
+        self.parsing_timeout = val;
         self
     }
 }
@@ -206,7 +206,7 @@ impl<A> ProxyProtocolAcceptor<A> {
     pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
         ProxyProtocolAcceptor {
             inner: acceptor,
-            job_timeout: self.job_timeout,
+            parsing_timeout: self.parsing_timeout,
         }
     }
 }
