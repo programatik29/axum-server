@@ -34,8 +34,8 @@ where
 {
     pub(crate) fn new(future: F, acceptor: A, service: S, parsing_timeout: Duration) -> Self {
         let inner = AcceptFuture::Timeout {
-            future,
-            acceptor,
+            future: Some(future),
+            acceptor: Some(acceptor),
             service: Some(service),
             parsing_timeout,
         };
@@ -61,9 +61,8 @@ pin_project! {
         I: Peekable,
     {
         Timeout {
-            #[pin]
-            future: F,
-            acceptor: A,
+            future: Option<F>,
+            acceptor: Option<A>,
             service: Option<S>,
             parsing_timeout: Duration,
         },
@@ -101,7 +100,8 @@ where
                     parsing_timeout,
                 } => {
                     let parsing_timeout = *parsing_timeout;
-                    let acceptor = *acceptor;
+                    let future = future.take().expect("future polled after ready");
+                    let acceptor = acceptor.take().expect("future polled after ready");
                     let service = service.take().expect("future polled after ready");
 
                     this.inner.set(AcceptFuture::ReadHeader {
