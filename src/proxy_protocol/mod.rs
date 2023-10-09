@@ -194,7 +194,7 @@ impl<A> ProxyProtocolAcceptor<A> {
     }
 
     /// Override the default Proxy Header parsing timeout of 10 seconds, except during testing.
-    pub(crate) fn job_timeout(mut self, val: Duration) -> Self {
+    pub fn job_timeout(mut self, val: Duration) -> Self {
         self.job_timeout = val;
         self
     }
@@ -202,7 +202,7 @@ impl<A> ProxyProtocolAcceptor<A> {
 
 impl<A> ProxyProtocolAcceptor<A> {
     /// Overwrite inner acceptor.
-    pub(crate) fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
+    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> ProxyProtocolAcceptor<Acceptor> {
         ProxyProtocolAcceptor {
             inner: acceptor,
             job_timeout: self.job_timeout,
