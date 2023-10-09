@@ -134,6 +134,7 @@ where
 
 /// Middleware for adding client IP address to the request `forwarded` header.
 /// see spec: <https://www.rfc-editor.org/rfc/rfc7239#section-5.2>
+#[derive(Debug)]
 pub struct ForwardClientIp<S> {
     inner: S,
     client_address_opt: Option<IpAddr>,
