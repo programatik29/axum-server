@@ -226,8 +226,9 @@ where
 
         let read_header_future = Box::pin(read_proxy_header(stream));
         let inner_acceptor = self.inner.clone();
+        let parsing_timeout = self.parsing_timeout;
 
-        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, service)
+        ProxyProtocolAcceptorFuture::new(read_header_future, inner_acceptor, service, parsing_timeout)
     }
 }
 
