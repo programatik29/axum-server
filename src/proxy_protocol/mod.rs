@@ -45,11 +45,10 @@ use self::future::ProxyProtocolAcceptorFuture;
 
 const V1_PREFIX_LEN: usize = 5;
 const V2_PREFIX_LEN: usize = 12;
-const V2_MINIMUM_LEN: usize = 16;
 /// The index of the version-command byte.
-const VERSION_COMMAND: usize = V2_PREFIX_LEN;
+const V2_MINIMUM_LEN: usize = 16;
 /// The index of the address family-protocol byte.
-const ADDRESS_FAMILY_PROTOCOL: usize = VERSION_COMMAND + 1;
+const ADDRESS_FAMILY_PROTOCOL: usize = V2_PREFIX_LEN + 1;
 /// The index of the start of the big-endian u16 length.
 const LENGTH: usize = ADDRESS_FAMILY_PROTOCOL + 1;
 const DEFAULT_BUFFER_LEN: usize = 512;
@@ -66,49 +65,53 @@ where
     let mut buffer = [0; DEFAULT_BUFFER_LEN];
 
     // 1. read minimum length
-    if let Err(e) = stream.read_exact(&mut buffer[..V2_PREFIX_LEN]).await {
+    if let Err(e) = stream.read_exact(&mut buffer[..V2_MINIMUM_LEN]).await {
         let msg = format!("Stream `read_exact` error: {}. Not able to read enough bytes to find a V2 Proxy Protocol header.", e);
-        return Err(std::io::Error::new(e.kind(), msg));
+        return Err(io::Error::new(e.kind(), msg));
     }
 
     // 2. check for v2 prefix
     if &buffer[..V2_PREFIX_LEN] != v2::PROTOCOL_PREFIX {
         if &buffer[..V1_PREFIX_LEN] == v1::PROTOCOL_PREFIX.as_bytes() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "V1 Proxy Protocol header detected, which is not supported",
             ));
         } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "No valid Proxy Protocol header detected",
             ));
         }
     }
 
-    // 3. read the remaining header length
+    // 3. decode the v2 header length
     let length = u16::from_be_bytes([buffer[LENGTH], buffer[LENGTH + 1]]) as usize;
     let full_length = V2_MINIMUM_LEN + length;
 
     if full_length > DEFAULT_BUFFER_LEN {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("V2 Proxy Protocol header length is too long. Consider increasing default buffer size. Length: {}", length),
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("V2 Proxy Protocol header length is too long. Consider increasing default buffer size. Header length: {}", full_length),
         ));
     }
 
-    if let Err(e) = stream.read_exact(&mut buffer[..full_length]).await {
+    // 4. read the remaining header length
+    if let Err(e) = stream
+        .read_exact(&mut buffer[V2_MINIMUM_LEN..full_length])
+        .await
+    {
         let msg = format!("Stream `read_exact` error: {}. Not able to read enough bytes to read the full V2 Proxy Protocol header.", e);
-        return Err(std::io::Error::new(e.kind(), msg));
+        return Err(io::Error::new(e.kind(), msg));
     }
 
-    // 4. parse the header
+    // 5. parse the header
     let header = HeaderResult::parse(&buffer[..full_length]);
 
     match header {
         HeaderResult::V1(Ok(_header)) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "V1 Proxy Protocol header detected when parsing data",
             ));
         }
@@ -121,8 +124,8 @@ where
                     SocketAddr::new(IpAddr::V6(ip.source_address), ip.source_port)
                 }
                 v2::Addresses::Unix(unix) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
                         format!(
                             "Unix socket addresses are not supported. Addresses: {:?}",
                             unix
@@ -135,19 +138,18 @@ where
                     return Ok((stream, None));
                 }
             };
-            println!("SERVER client_address: {:?}", client_address);
 
             Ok((stream, Some(client_address)))
         }
         HeaderResult::V1(Err(_error)) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "No valid V1 Proxy Protocol header received",
             ));
         }
         HeaderResult::V2(Err(_error)) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "No valid V2 Proxy Protocol header received",
             ));
         }
@@ -292,10 +294,9 @@ mod tests {
     async fn start_and_request() {
         let (_handle, _server_task, server_addr) = start_server().await;
 
-        // let addr = start_proxy(server_addr)
-        //     .await
-        //     .expect("Failed to start proxy");
-        let addr = server_addr;
+        let addr = start_proxy(server_addr, true)
+            .await
+            .expect("Failed to start proxy");
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -315,7 +316,7 @@ mod tests {
 
             Server::bind(addr)
                 .handle(server_handle)
-                // .proxy_protocol_enabled()
+                .proxy_protocol_enabled()
                 .serve(app.into_make_service())
                 .await
         });
@@ -327,6 +328,7 @@ mod tests {
 
     async fn start_proxy(
         server_address: SocketAddr,
+        enable_proxy_header: bool,
     ) -> Result<SocketAddr, Box<dyn std::error::Error>> {
         let proxy_address = SocketAddr::from(([127, 0, 0, 1], 8001));
         let listener = TcpListener::bind(proxy_address).await?;
@@ -336,7 +338,10 @@ mod tests {
                 match listener.accept().await {
                     Ok((client_stream, _)) => {
                         tokio::spawn(async move {
-                            if let Err(e) = handle_conn(client_stream, server_address, true).await {
+                            if let Err(e) =
+                                handle_conn(client_stream, server_address, enable_proxy_header)
+                                    .await
+                            {
                                 println!("Error handling connection: {:?}", e);
                             }
                         });
@@ -396,17 +401,13 @@ mod tests {
         write_stream: &mut (impl AsyncWriteExt + Unpin),
     ) -> io::Result<()> {
         let mut buf = [0; 4096];
-
         loop {
             let n = read_stream.read(&mut buf).await?;
-
             if n == 0 {
                 break; // EOF
             }
-
             write_stream.write_all(&buf[..n]).await?;
         }
-
         Ok(())
     }
 
@@ -415,7 +416,6 @@ mod tests {
         client_address: SocketAddr,
         server_address: SocketAddr,
     ) -> io::Result<()> {
-        println!("PROXY client_address: {:?}", client_address);
         let mut header = Builder::with_addresses(
             // Declare header as mutable
             Version::Two | Command::Proxy,
