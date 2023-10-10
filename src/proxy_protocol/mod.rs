@@ -23,7 +23,6 @@
 //!        .unwrap();
 //! }
 //! ```
-use std::future::poll_fn;
 use std::future::Future;
 use std::io;
 use std::net::IpAddr;
@@ -34,92 +33,117 @@ use std::time::Duration;
 
 use http::HeaderValue;
 use http::Request;
-use ppp::{v2, HeaderResult, PartialResult};
-use tokio::io::AsyncReadExt;
-use tokio::io::ReadBuf;
+use ppp::{v1, v2, HeaderResult};
 use tower_service::Service;
 
 use crate::accept::Accept;
 use std::fmt;
+use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod future;
 use self::future::ProxyProtocolAcceptorFuture;
 
-pub trait Peekable {
-    fn poll_peek(
-        &mut self,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<usize>>;
-}
+const V1_PREFIX_LEN: usize = 5;
+const V2_PREFIX_LEN: usize = 12;
+const V2_MINIMUM_LEN: usize = 16;
+/// The index of the version-command byte.
+const VERSION_COMMAND: usize = V2_PREFIX_LEN;
+/// The index of the address family-protocol byte.
+const ADDRESS_FAMILY_PROTOCOL: usize = VERSION_COMMAND + 1;
+/// The index of the start of the big-endian u16 length.
+const LENGTH: usize = ADDRESS_FAMILY_PROTOCOL + 1;
+const DEFAULT_BUFFER_LEN: usize = 512;
 
 /// Note: Currently only supports the V2 PROXY header format.
 /// See proxy header spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>
 pub(crate) async fn read_proxy_header<I>(mut stream: I) -> Result<(I, Option<IpAddr>), io::Error>
 where
-    I: Peekable + AsyncRead + Unpin,
+    I: AsyncRead + Unpin,
 {
-    // Maximum expected size for PROXY header is
-    // unlikely to be larger than 512 bytes unless additional fields are added.
-    const BUFFER_SIZE: usize = 512;
-    // Mutable buffer for storing the bytes received from the stream.
-    let mut array_buffer = [0; BUFFER_SIZE];
-    let mut buffer = ReadBuf::new(&mut array_buffer);
+    // mutable buffer for storing stream data
+    let mut buffer = [0; DEFAULT_BUFFER_LEN];
 
-    // peek the stream until find a complete header
-    let header = loop {
-        // Peek the stream data into the buffer.
-        // Each loop re-reads the stream from beginning,
-        // but further in if more stream has arrived.
-        poll_fn(|cx| stream.poll_peek(cx, &mut buffer)).await?;
+    // 1. read minimum length
+    if let Err(e) = stream.read_exact(&mut buffer[..V2_PREFIX_LEN]).await {
+        let msg = format!("Stream `read_exact` error: {}. Not able to read enough bytes to find a V2 Proxy Protocol header.", e);
+        return Err(std::io::Error::new(e.kind(), msg));
+    }
 
-        let header = HeaderResult::parse(buffer.filled());
-
-        if header.is_complete() {
-            break header;
-        } else if buffer.remaining() == 0 {
-            // Buffer limit reached without finding a complete header. Consider increasing the buffer size.
-            return Ok((stream, None));
+    // 2. check for v2 prefix
+    if &buffer[..V2_PREFIX_LEN] != v2::PROTOCOL_PREFIX {
+        if &buffer[..V1_PREFIX_LEN] == v1::PROTOCOL_PREFIX.as_bytes() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "V1 Proxy Protocol header detected, which is not supported",
+            ));
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No valid Proxy Protocol header detected",
+            ));
         }
+    }
 
-        buffer.clear();
-    };
+    // 3. read the remaining header length
+    let length = u16::from_be_bytes([buffer[LENGTH], buffer[LENGTH + 1]]) as usize;
+    let full_length = V2_MINIMUM_LEN + length;
+
+    if full_length > DEFAULT_BUFFER_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("V2 Proxy Protocol header length is too long. Consider increasing default buffer size. Length: {}", length),
+        ));
+    }
+
+    if let Err(e) = stream.read_exact(&mut buffer[..full_length]).await {
+        let msg = format!("Stream `read_exact` error: {}. Not able to read enough bytes to read the full V2 Proxy Protocol header.", e);
+        return Err(std::io::Error::new(e.kind(), msg));
+    }
+
+    // 4. parse the header
+    let header = HeaderResult::parse(&buffer[..full_length]);
 
     match header {
         HeaderResult::V1(Ok(_header)) => {
-            // V1 PROXY header detected, which is not supported
-            Ok((stream, None))
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "V1 Proxy Protocol header detected when parsing data",
+            ));
         }
         HeaderResult::V2(Ok(header)) => {
             let client_address = match header.addresses {
                 v2::Addresses::IPv4(ip) => IpAddr::V4(ip.source_address),
                 v2::Addresses::IPv6(ip) => IpAddr::V6(ip.source_address),
-                v2::Addresses::Unix(_unix) => {
-                    // Unix socket addresses are not supported
-                    return Ok((stream, None));
+                v2::Addresses::Unix(unix) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Unix socket addresses are not supported. Addresses: {:?}",
+                            unix
+                        ),
+                    ));
                 }
                 v2::Addresses::Unspecified => {
                     // V2 PROXY header addresses "Unspecified"
+                    // Return client address as `None` so that "unknown" is used in the http header
                     return Ok((stream, None));
                 }
             };
 
-            // Remove header length in bytes from the stream
-            let header_len = header.len();
-            stream
-                .read_exact(&mut buffer.filled_mut()[..header_len])
-                .await?;
-
             Ok((stream, Some(client_address)))
         }
         HeaderResult::V1(Err(_error)) => {
-            // No valid V1 PROXY header received
-            Ok((stream, None))
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No valid V1 Proxy Protocol header received",
+            ));
         }
         HeaderResult::V2(Err(_error)) => {
-            // No valid V2 PROXY header received
-            Ok((stream, None))
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No valid V2 Proxy Protocol header received",
+            ));
         }
     }
 }
@@ -207,7 +231,7 @@ impl<A, I, S> Accept<I, S> for ProxyProtocolAcceptor<A>
 where
     A: Accept<I, S> + Clone,
     A::Stream: AsyncRead + AsyncWrite + Unpin,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable + Send + 'static,
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;

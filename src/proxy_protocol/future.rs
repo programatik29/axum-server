@@ -1,6 +1,6 @@
 //! Future types.
 use crate::accept::Accept;
-use crate::proxy_protocol::{ForwardClientIp, Peekable};
+use crate::proxy_protocol::ForwardClientIp;
 use pin_project_lite::pin_project;
 use std::io::{Error, ErrorKind};
 use std::{
@@ -20,7 +20,6 @@ pin_project! {
     pub struct ProxyProtocolAcceptorFuture<F, A, I, S>
     where
         A: Accept<I, S>,
-        I: Peekable,
     {
         #[pin]
         inner: AcceptFuture<F, A, I, S>,
@@ -30,7 +29,7 @@ pin_project! {
 impl<F, A, I, S> ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
+    I: AsyncRead + AsyncWrite + Unpin + 'static,
 {
     pub(crate) fn new(future: F, acceptor: A, service: S, parsing_timeout: Duration) -> Self {
         let inner = AcceptFuture::Timeout {
@@ -46,7 +45,7 @@ where
 impl<F, A, I, S> fmt::Debug for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable,
+    I: AsyncRead + AsyncWrite + Unpin,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyProtocolAcceptorFuture").finish()
@@ -58,7 +57,6 @@ pin_project! {
     enum AcceptFuture<F, A, I, S>
     where
         A: Accept<I, S>,
-        I: Peekable,
     {
         Timeout {
             future: Option<F>,
@@ -83,7 +81,7 @@ pin_project! {
 impl<F, A, I, S> Future for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
-    I: AsyncRead + AsyncWrite + Unpin + Peekable + 'static,
+    I: AsyncRead + AsyncWrite + Unpin + 'static,
     F: Future<Output = Result<(I, Option<IpAddr>), io::Error>>,
 {
     type Output = io::Result<(A::Stream, ForwardClientIp<A::Service>)>;
