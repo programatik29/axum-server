@@ -23,23 +23,22 @@
 //!        .unwrap();
 //! }
 //! ```
-use std::future::Future;
-use std::io;
-use std::net::IpAddr;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use std::time::Duration;
+use crate::accept::Accept;
+use std::{
+    fmt,
+    future::Future,
+    io,
+    net::{IpAddr, SocketAddr},
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use http::HeaderValue;
 use http::Request;
 use ppp::{v1, v2, HeaderResult};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tower_service::Service;
-
-use crate::accept::Accept;
-use std::fmt;
-use tokio::io::AsyncReadExt;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod future;
 use self::future::ProxyProtocolAcceptorFuture;
@@ -57,7 +56,9 @@ const DEFAULT_BUFFER_LEN: usize = 512;
 
 /// Note: Currently only supports the V2 PROXY header format.
 /// See proxy header spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>
-pub(crate) async fn read_proxy_header<I>(mut stream: I) -> Result<(I, Option<IpAddr>), io::Error>
+pub(crate) async fn read_proxy_header<I>(
+    mut stream: I,
+) -> Result<(I, Option<SocketAddr>), io::Error>
 where
     I: AsyncRead + Unpin,
 {
@@ -113,8 +114,12 @@ where
         }
         HeaderResult::V2(Ok(header)) => {
             let client_address = match header.addresses {
-                v2::Addresses::IPv4(ip) => IpAddr::V4(ip.source_address),
-                v2::Addresses::IPv6(ip) => IpAddr::V6(ip.source_address),
+                v2::Addresses::IPv4(ip) => {
+                    SocketAddr::new(IpAddr::V4(ip.source_address), ip.source_port)
+                }
+                v2::Addresses::IPv6(ip) => {
+                    SocketAddr::new(IpAddr::V6(ip.source_address), ip.source_port)
+                }
                 v2::Addresses::Unix(unix) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -153,7 +158,7 @@ where
 #[derive(Debug)]
 pub struct ForwardClientIp<S> {
     inner: S,
-    client_address_opt: Option<IpAddr>,
+    client_address_opt: Option<SocketAddr>,
 }
 
 impl<S> Service<Request<hyper::Body>> for ForwardClientIp<S>
@@ -170,12 +175,12 @@ where
 
     fn call(&mut self, mut req: Request<hyper::Body>) -> Self::Future {
         let forwarded_string = match self.client_address_opt {
-            Some(ip) => match ip {
-                IpAddr::V4(ipv4) => {
-                    format!("for={}", ipv4)
+            Some(socket_addr) => match socket_addr {
+                SocketAddr::V4(addr) => {
+                    format!("for={}:{}", addr.ip(), addr.port())
                 }
-                IpAddr::V6(ipv6) => {
-                    format!("for=\"[{}]\"", ipv6)
+                SocketAddr::V6(addr) => {
+                    format!("for=\"[{}]:{}\"", addr.ip(), addr.port())
                 }
             },
             None => "for=unknown".to_string(),
@@ -236,7 +241,7 @@ where
     type Stream = A::Stream;
     type Service = ForwardClientIp<A::Service>;
     type Future = ProxyProtocolAcceptorFuture<
-        Pin<Box<dyn Future<Output = Result<(I, Option<IpAddr>), io::Error>> + Send>>,
+        Pin<Box<dyn Future<Output = Result<(I, Option<SocketAddr>), io::Error>> + Send>>,
         A,
         I,
         S,

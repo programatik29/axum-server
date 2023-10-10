@@ -1,17 +1,17 @@
 //! Future types.
 use crate::accept::Accept;
 use crate::proxy_protocol::ForwardClientIp;
-use pin_project_lite::pin_project;
-use std::io::{Error, ErrorKind};
 use std::{
     fmt,
     future::Future,
-    io,
-    net::IpAddr,
+    io::{self, Error, ErrorKind},
+    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
 };
+
+use pin_project_lite::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{timeout, Timeout};
 
@@ -73,7 +73,7 @@ pin_project! {
         ForwardIp {
             #[pin]
             future: A::Future,
-            client_address_opt: Option<IpAddr>,
+            client_address_opt: Option<SocketAddr>,
         },
     }
 }
@@ -82,7 +82,7 @@ impl<F, A, I, S> Future for ProxyProtocolAcceptorFuture<F, A, I, S>
 where
     A: Accept<I, S>,
     I: AsyncRead + AsyncWrite + Unpin + 'static,
-    F: Future<Output = Result<(I, Option<IpAddr>), io::Error>>,
+    F: Future<Output = Result<(I, Option<SocketAddr>), io::Error>>,
 {
     type Output = io::Result<(A::Stream, ForwardClientIp<A::Service>)>;
 
