@@ -135,6 +135,7 @@ where
                     return Ok((stream, None));
                 }
             };
+            println!("SERVER client_address: {:?}", client_address);
 
             Ok((stream, Some(client_address)))
         }
@@ -277,9 +278,31 @@ mod tests {
         client::conn::{handshake, SendRequest},
         Body,
     };
+    use ppp::v2::{Builder, Command, Protocol, Type, Version};
     use std::{io, net::SocketAddr, time::Duration};
-    use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        task::JoinHandle,
+        time::timeout,
+    };
     use tower::{Service, ServiceExt};
+
+    #[tokio::test]
+    async fn start_and_request() {
+        let (_handle, _server_task, server_addr) = start_server().await;
+
+        // let addr = start_proxy(server_addr)
+        //     .await
+        //     .expect("Failed to start proxy");
+        let addr = server_addr;
+
+        let (mut client, _conn) = connect(addr).await;
+
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+    }
 
     async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
@@ -288,10 +311,11 @@ mod tests {
         let server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(|| async { "Hello, world!" }));
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
 
             Server::bind(addr)
                 .handle(server_handle)
+                // .proxy_protocol_enabled()
                 .serve(app.into_make_service())
                 .await
         });
@@ -299,5 +323,138 @@ mod tests {
         let addr = handle.listening().await.unwrap();
 
         (handle, server_task, addr)
+    }
+
+    async fn start_proxy(
+        server_address: SocketAddr,
+    ) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+        let proxy_address = SocketAddr::from(([127, 0, 0, 1], 8001));
+        let listener = TcpListener::bind(proxy_address).await?;
+
+        let _proxy_task = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((client_stream, _)) => {
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_conn(client_stream, server_address, true).await {
+                                println!("Error handling connection: {:?}", e);
+                            }
+                        });
+                    }
+                    Err(e) => println!("Failed to accept a connection: {:?}", e),
+                }
+            }
+        });
+
+        Ok(proxy_address)
+    }
+
+    async fn handle_conn(
+        mut client_stream: TcpStream,
+        server_address: SocketAddr,
+        enable_proxy_header: bool,
+    ) -> io::Result<()> {
+        let client_address = client_stream.peer_addr()?; // Get the address before splitting
+        let mut server_stream = TcpStream::connect(server_address).await?;
+        let server_address = server_stream.peer_addr()?; // Get the address before splitting
+
+        let (mut client_read, mut client_write) = client_stream.split();
+        let (mut server_read, mut server_write) = server_stream.split();
+
+        if enable_proxy_header {
+            send_proxy_header(&mut server_write, client_address, server_address).await?;
+        }
+
+        let duration = Duration::from_secs(1);
+        let client_to_server = async {
+            match timeout(duration, transfer(&mut client_read, &mut server_write)).await {
+                Ok(result) => result,
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Client to Server transfer timed out",
+                )),
+            }
+        };
+
+        let server_to_client = async {
+            match timeout(duration, transfer(&mut server_read, &mut client_write)).await {
+                Ok(result) => result,
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Server to Client transfer timed out",
+                )),
+            }
+        };
+
+        let _ = tokio::try_join!(client_to_server, server_to_client);
+
+        Ok(())
+    }
+
+    async fn transfer(
+        read_stream: &mut (impl AsyncReadExt + Unpin),
+        write_stream: &mut (impl AsyncWriteExt + Unpin),
+    ) -> io::Result<()> {
+        let mut buf = [0; 4096];
+
+        loop {
+            let n = read_stream.read(&mut buf).await?;
+
+            if n == 0 {
+                break; // EOF
+            }
+
+            write_stream.write_all(&buf[..n]).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_proxy_header(
+        write_stream: &mut (impl AsyncWriteExt + Unpin),
+        client_address: SocketAddr,
+        server_address: SocketAddr,
+    ) -> io::Result<()> {
+        println!("PROXY client_address: {:?}", client_address);
+        let mut header = Builder::with_addresses(
+            // Declare header as mutable
+            Version::Two | Command::Proxy,
+            Protocol::Stream,
+            (client_address, server_address),
+        )
+        .write_tlv(Type::NoOp, b"Hello, World!")?
+        .build()?;
+
+        for byte in header.drain(..) {
+            write_stream.write_all(&[byte]).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+        let stream = TcpStream::connect(addr).await.unwrap();
+
+        let (send_request, connection) = handshake(stream).await.unwrap();
+
+        let task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        (send_request, task)
+    }
+
+    async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
+        let (parts, body) = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+            .unwrap()
+            .into_parts();
+        let body = hyper::body::to_bytes(body).await.unwrap();
+
+        (parts, body)
     }
 }
