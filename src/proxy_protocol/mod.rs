@@ -1,8 +1,11 @@
-//! The PROXY protocol header compatibility.
-//! See spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>
+//! The PROXY protocol header compatibility. See spec: <https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt>.
+//! This feature allows the proxy header to be read from the TCP stream, and any client address is forwarded on
+//! in the HTTP `forwarded` header for the rest of the server.
 //!
 //! Note: if you are setting a custom acceptor, `proxy_protocol_enabled` must be called after this is set.
-//! Safest to use directly before serve when all options are configured.
+//! It is best to use directly before calling `serve` when all options are configured. This is because it
+//! wraps the initial acceptor, so the proxy header is removed from the beginning off the stream
+//! before the messages are forwarded on.
 //!
 //! # Example
 //!
@@ -197,6 +200,7 @@ where
     }
 }
 
+/// Acceptor wrapper for receiving Proxy Protocol headers.
 #[derive(Clone)]
 pub struct ProxyProtocolAcceptor<A> {
     inner: A,
@@ -204,7 +208,9 @@ pub struct ProxyProtocolAcceptor<A> {
 }
 
 impl<A> ProxyProtocolAcceptor<A> {
-    pub(crate) fn new(inner: A) -> Self {
+    /// Create a new proxy protocol acceptor from an initial acceptor.
+    /// This is compatible with tls acceptors.
+    pub fn new(inner: A) -> Self {
         #[cfg(not(test))]
         let parsing_timeout = Duration::from_secs(10);
 
