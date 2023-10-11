@@ -112,12 +112,10 @@ where
     let header = HeaderResult::parse(&buffer[..full_length]);
 
     match header {
-        HeaderResult::V1(Ok(_header)) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "V1 Proxy Protocol header detected when parsing data",
-            ));
-        }
+        HeaderResult::V1(Ok(_header)) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "V1 Proxy Protocol header detected when parsing data",
+        )),
         HeaderResult::V2(Ok(header)) => {
             let client_address = match header.addresses {
                 v2::Addresses::IPv4(ip) => {
@@ -144,18 +142,14 @@ where
 
             Ok((stream, Some(client_address)))
         }
-        HeaderResult::V1(Err(_error)) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "No valid V1 Proxy Protocol header received",
-            ));
-        }
-        HeaderResult::V2(Err(_error)) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "No valid V2 Proxy Protocol header received",
-            ));
-        }
+        HeaderResult::V1(Err(_error)) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "No valid V1 Proxy Protocol header received",
+        )),
+        HeaderResult::V2(Err(_error)) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "No valid V2 Proxy Protocol header received",
+        )),
     }
 }
 
