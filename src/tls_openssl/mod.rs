@@ -194,6 +194,8 @@ impl fmt::Debug for OpenSSLConfig {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "proxy-protocol")]
+    use crate::proxy_protocol::tests::start_proxy;
     use crate::{
         handle::Handle,
         tls_openssl::{self, OpenSSLConfig},
@@ -216,6 +218,22 @@ mod tests {
     #[tokio::test]
     async fn start_and_request() {
         let (_handle, _server_task, addr) = start_server().await;
+
+        let (mut client, _conn) = connect(addr).await;
+
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[cfg(feature = "proxy-protocol")]
+    #[tokio::test]
+    async fn proxy_protocol_start_and_request() {
+        let (_handle, _server_task, server_addr) = start_proxy_protocol_server().await;
+
+        let addr = start_proxy(server_addr, true)
+            .await
+            .expect("Failed to start proxy");
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -311,6 +329,34 @@ mod tests {
 
             tls_openssl::bind_openssl(addr, config)
                 .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        (handle, server_task, addr)
+    }
+
+    #[cfg(feature = "proxy-protocol")]
+    async fn start_proxy_protocol_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+            let config = OpenSSLConfig::from_pem_file(
+                "examples/self-signed-certs/cert.pem",
+                "examples/self-signed-certs/key.pem",
+            )
+            .unwrap();
+
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+            tls_openssl::bind_openssl(addr, config)
+                .handle(server_handle)
+                .enable_proxy_protocol()
                 .serve(app.into_make_service())
                 .await
         });
