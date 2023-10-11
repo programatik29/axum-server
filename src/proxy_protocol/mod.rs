@@ -271,7 +271,7 @@ impl<A> fmt::Debug for ProxyProtocolAcceptor<A> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::{handle::Handle, server::Server};
     use axum::http::Response;
     use axum::{routing::get, Router};
@@ -440,7 +440,7 @@ mod tests {
         (handle, server_task, addr)
     }
 
-    async fn start_proxy(
+    pub(crate) async fn start_proxy(
         server_address: SocketAddr,
         enable_proxy_header: bool,
     ) -> Result<SocketAddr, Box<dyn std::error::Error>> {
