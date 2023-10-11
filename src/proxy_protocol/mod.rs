@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_and_request() {
-        let (_handle, _server_task, server_addr) = start_server().await;
+        let (_handle, _server_task, server_addr) = start_server(true).await;
 
         let addr = start_proxy(server_addr, true)
             .await
@@ -307,12 +307,44 @@ mod tests {
 
     #[tokio::test]
     async fn not_parsing_when_header_present_fails() {
-        // TODO: Implement
+        let (_handle, _server_task, server_addr) = start_server(false).await;
+
+        let addr = start_proxy(server_addr, true)
+            .await
+            .expect("Failed to start proxy");
+
+        let (mut client, _conn) = connect(addr).await;
+
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert!(body.as_ref() != b"Hello, world!");
     }
 
     #[tokio::test]
     async fn parsing_when_header_not_present_fails() {
-        // TODO: Implement
+        let (_handle, _server_task, server_addr) = start_server(true).await;
+
+        let addr = start_proxy(server_addr, false)
+            .await
+            .expect("Failed to start proxy");
+
+        let (mut client, _conn) = connect(addr).await;
+
+        match client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+        {
+            Ok(_) => panic!("Should have failed"),
+            Err(e) => {
+                if e.is_incomplete_message() {
+                } else {
+                    panic!("Received unexpected error");
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -322,7 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let (handle, _server_task, server_addr) = start_server().await;
+        let (handle, _server_task, server_addr) = start_server(true).await;
 
         let addr = start_proxy(server_addr, true)
             .await
@@ -356,7 +388,9 @@ mod tests {
         // TODO: Implement
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server(
+        parse_proxy_header: bool,
+    ) -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
@@ -365,11 +399,18 @@ mod tests {
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
 
-            Server::bind(addr)
-                .handle(server_handle)
-                .proxy_protocol_enabled()
-                .serve(app.into_make_service())
-                .await
+            if parse_proxy_header {
+                Server::bind(addr)
+                    .handle(server_handle)
+                    .proxy_protocol_enabled()
+                    .serve(app.into_make_service())
+                    .await
+            } else {
+                Server::bind(addr)
+                    .handle(server_handle)
+                    .serve(app.into_make_service())
+                    .await
+            }
         });
 
         let addr = handle.listening().await.unwrap();
