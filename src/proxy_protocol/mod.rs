@@ -328,7 +328,7 @@ mod tests {
         let server_handle = handle.clone();
         let _server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(handle_request));
-            let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
             Server::bind(addr)
                 .handle(server_handle)
                 .enable_proxy_protocol()
@@ -425,7 +425,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(|| async { "Hello, world!" }));
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
             if parse_proxy_header {
                 Server::bind(addr)
@@ -450,8 +450,9 @@ mod tests {
         server_address: SocketAddr,
         enable_proxy_header: bool,
     ) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-        let proxy_address = SocketAddr::from(([127, 0, 0, 1], 8001));
+        let proxy_address = SocketAddr::from(([127, 0, 0, 1], 0));
         let listener = TcpListener::bind(proxy_address).await?;
+        let proxy_address = listener.local_addr()?;
 
         let _proxy_task = tokio::spawn(async move {
             loop {
