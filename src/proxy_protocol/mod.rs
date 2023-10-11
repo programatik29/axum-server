@@ -273,6 +273,7 @@ impl<A> fmt::Debug for ProxyProtocolAcceptor<A> {
 #[cfg(test)]
 mod tests {
     use crate::{handle::Handle, server::Server};
+    use axum::http::Response;
     use axum::{routing::get, Router};
     use bytes::Bytes;
     use http::{response, Request};
@@ -298,11 +299,48 @@ mod tests {
             .await
             .expect("Failed to start proxy");
 
-        let (mut client, _conn) = connect(addr).await;
+        let (mut client, _conn, _client_addr) = connect(addr).await;
 
         let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    async fn handle_request(req: Request<Body>) -> Response<Body> {
+        // Extract and print headers
+        if let Some(header_value) = req.headers().get("forwarded") {
+            let header_value_str = header_value.to_str().unwrap().to_string(); // Clone the string
+            Response::new(Body::from(header_value_str))
+        } else {
+            Response::new(Body::from("Hello World!"))
+        }
+    }
+    #[tokio::test]
+    async fn server_receives_decoded_client_address() {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let _server_task = tokio::spawn(async move {
+            let app = Router::new().route("/", get(handle_request));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+            Server::bind(addr)
+                .handle(server_handle)
+                .proxy_protocol_enabled()
+                .serve(app.into_make_service())
+                .await
+        });
+        let server_addr = handle.listening().await.unwrap();
+
+        let addr = start_proxy(server_addr, true)
+            .await
+            .expect("Failed to start proxy");
+
+        let (mut client, _conn, client_addr) = connect(addr).await;
+
+        let (_parts, body) = send_empty_request(&mut client).await;
+        let body_str = String::from_utf8(body.to_vec()).expect("Response body is not valid UTF-8");
+
+        assert_eq!(body_str, format!("for={}", client_addr));
     }
 
     #[tokio::test]
@@ -313,7 +351,7 @@ mod tests {
             .await
             .expect("Failed to start proxy");
 
-        let (mut client, _conn) = connect(addr).await;
+        let (mut client, _conn, _client_addr) = connect(addr).await;
 
         let (_parts, body) = send_empty_request(&mut client).await;
 
@@ -328,7 +366,7 @@ mod tests {
             .await
             .expect("Failed to start proxy");
 
-        let (mut client, _conn) = connect(addr).await;
+        let (mut client, _conn, _client_addr) = connect(addr).await;
 
         match client
             .ready()
@@ -348,11 +386,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_receives_decoded_client_address() {
-        // TODO: Implement
-    }
-
-    #[tokio::test]
     async fn test_shutdown() {
         let (handle, _server_task, server_addr) = start_server(true).await;
 
@@ -360,7 +393,7 @@ mod tests {
             .await
             .expect("Failed to start proxy");
 
-        let (mut client, conn) = connect(addr).await;
+        let (mut client, conn, _client_addr) = connect(addr).await;
 
         handle.shutdown();
 
@@ -375,17 +408,6 @@ mod tests {
 
         // Connection task should finish soon.
         let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_graceful_shutdown() {
-        // TODO: Implement
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_graceful_shutdown_timed() {
-        // TODO: Implement
     }
 
     async fn start_server(
@@ -524,8 +546,10 @@ mod tests {
         Ok(())
     }
 
-    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>, SocketAddr) {
         let stream = TcpStream::connect(addr).await.unwrap();
+
+        let client_addr = stream.local_addr().unwrap();
 
         let (send_request, connection) = handshake(stream).await.unwrap();
 
@@ -533,7 +557,7 @@ mod tests {
             let _ = connection.await;
         });
 
-        (send_request, task)
+        (send_request, task, client_addr)
     }
 
     async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
