@@ -94,7 +94,7 @@ impl<A> Server<A> {
     #[cfg(feature = "proxy-protocol")]
     /// Enable proxy protocol header parsing.
     /// Note has to be called after initial acceptor is set.
-    pub fn proxy_protocol_enabled(self) -> Server<ProxyProtocolAcceptor<A>> {
+    pub fn enable_proxy_protocol(self) -> Server<ProxyProtocolAcceptor<A>> {
         let initial_acceptor = self.acceptor;
         let acceptor = ProxyProtocolAcceptor::new(initial_acceptor);
         Server {

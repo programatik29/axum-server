@@ -2,7 +2,7 @@
 //! This feature allows the proxy header to be read from the TCP stream, and any client address is forwarded on
 //! in the HTTP `forwarded` header for the rest of the server.
 //!
-//! Note: if you are setting a custom acceptor, `proxy_protocol_enabled` must be called after this is set.
+//! Note: if you are setting a custom acceptor, `enable_proxy_protocol` must be called after this is set.
 //! It is best to use directly before calling `serve` when all options are configured. This is because it
 //! wraps the initial acceptor, so the proxy header is removed from the beginning off the stream
 //! before the messages are forwarded on.
@@ -20,7 +20,7 @@
 //!    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 //!    println!("listening on {}", addr);
 //!    axum_server::bind(addr)
-//!        .proxy_protocol_enabled()
+//!        .enable_proxy_protocol()
 //!        .serve(app.into_make_service())
 //!        .await
 //!        .unwrap();
@@ -331,7 +331,7 @@ mod tests {
             let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
             Server::bind(addr)
                 .handle(server_handle)
-                .proxy_protocol_enabled()
+                .enable_proxy_protocol()
                 .serve(app.into_make_service())
                 .await
         });
@@ -430,7 +430,7 @@ mod tests {
             if parse_proxy_header {
                 Server::bind(addr)
                     .handle(server_handle)
-                    .proxy_protocol_enabled()
+                    .enable_proxy_protocol()
                     .serve(app.into_make_service())
                     .await
             } else {
