@@ -398,10 +398,6 @@ pub(crate) mod tests {
         }
     }
 
-    async fn basic_handler(_req: Request<Body>) -> Response<Body> {
-        Response::new(Body::from("Hello, world!"))
-    }
-
     async fn start_server(
         parse_proxy_header: bool,
         forward_ip: bool,
@@ -414,7 +410,7 @@ pub(crate) mod tests {
             if forward_ip {
                 app = Router::new().route("/", get(forward_ip_handler));
             } else {
-                app = Router::new().route("/", get(basic_handler));
+                app = Router::new().route("/", get(|| async { "Hello, world!" }));
             }
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
