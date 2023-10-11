@@ -305,6 +305,57 @@ mod tests {
         assert_eq!(body.as_ref(), b"Hello, world!");
     }
 
+    #[tokio::test]
+    async fn not_parsing_when_header_present_fails() {
+        // TODO: Implement
+    }
+
+    #[tokio::test]
+    async fn parsing_when_header_not_present_fails() {
+        // TODO: Implement
+    }
+
+    #[tokio::test]
+    async fn server_receives_decoded_client_address() {
+        // TODO: Implement
+    }
+
+    #[tokio::test]
+    async fn test_shutdown() {
+        let (handle, _server_task, server_addr) = start_server().await;
+
+        let addr = start_proxy(server_addr, true)
+            .await
+            .expect("Failed to start proxy");
+
+        let (mut client, conn) = connect(addr).await;
+
+        handle.shutdown();
+
+        let response_future_result = client
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await;
+
+        assert!(response_future_result.is_err());
+
+        // Connection task should finish soon.
+        let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown() {
+        // TODO: Implement
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_graceful_shutdown_timed() {
+        // TODO: Implement
+    }
+
     async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
