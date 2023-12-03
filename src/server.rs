@@ -1,24 +1,24 @@
 use crate::{
     accept::{Accept, DefaultAcceptor},
-    addr_incoming_config::AddrIncomingConfig,
     handle::Handle,
-    http_config::HttpConfig,
+    service::TowerToHyperService,
     service::{MakeServiceRef, SendService},
 };
 use futures_util::future::poll_fn;
 use http::Request;
-use hyper::server::{
-    accept::Accept as HyperAccept,
-    conn::{AddrIncoming, AddrStream},
+use hyper::body::Incoming;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder,
 };
 use std::{
     io::{self, ErrorKind},
     net::SocketAddr,
-    pin::Pin,
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
 
 /// HTTP server.
@@ -26,9 +26,7 @@ use tokio::{
 pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
     listener: Listener,
-    addr_incoming_conf: AddrIncomingConfig,
     handle: Handle,
-    http_conf: HttpConfig,
 }
 
 #[derive(Debug)]
@@ -56,9 +54,7 @@ impl Server {
         Self {
             acceptor,
             listener: Listener::Bind(addr),
-            addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
-            http_conf: HttpConfig::default(),
         }
     }
 
@@ -70,9 +66,7 @@ impl Server {
         Self {
             acceptor,
             listener: Listener::Std(listener),
-            addr_incoming_conf: AddrIncomingConfig::default(),
             handle,
-            http_conf: HttpConfig::default(),
         }
     }
 }
@@ -83,9 +77,7 @@ impl<A> Server<A> {
         Server {
             acceptor,
             listener: self.listener,
-            addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
-            http_conf: self.http_conf,
         }
     }
 
@@ -97,9 +89,7 @@ impl<A> Server<A> {
         Server {
             acceptor: acceptor(self.acceptor),
             listener: self.listener,
-            addr_incoming_conf: self.addr_incoming_conf,
             handle: self.handle,
-            http_conf: self.http_conf,
         }
     }
 
@@ -116,18 +106,6 @@ impl<A> Server<A> {
     /// Provide a handle for additional utilities.
     pub fn handle(mut self, handle: Handle) -> Self {
         self.handle = handle;
-        self
-    }
-
-    /// Overwrite http configuration.
-    pub fn http_config(mut self, config: HttpConfig) -> Self {
-        self.http_conf = config;
-        self
-    }
-
-    /// Overwrite addr incoming configuration.
-    pub fn addr_incoming_config(mut self, config: AddrIncomingConfig) -> Self {
-        self.addr_incoming_conf = config;
         self
     }
 
@@ -148,18 +126,16 @@ impl<A> Server<A> {
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
-        M: MakeServiceRef<AddrStream, Request<hyper::Body>>,
-        A: Accept<AddrStream, M::Service> + Clone + Send + Sync + 'static,
+        M: MakeServiceRef<SocketAddr, Request<Incoming>>,
+        A: Accept<TcpStream, M::Service> + Clone + Send + Sync + 'static,
         A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-        A::Service: SendService<Request<hyper::Body>> + Send,
+        A::Service: SendService<Request<Incoming>> + Send,
         A::Future: Send,
     {
         let acceptor = self.acceptor;
-        let addr_incoming_conf = self.addr_incoming_conf;
         let handle = self.handle;
-        let http_conf = self.http_conf;
 
-        let mut incoming = match bind_incoming(self.listener, addr_incoming_conf).await {
+        let mut incoming = match bind_incoming(self.listener).await {
             Ok(v) => v,
             Err(e) => {
                 handle.notify_listening(None);
@@ -167,13 +143,13 @@ impl<A> Server<A> {
             }
         };
 
-        handle.notify_listening(Some(incoming.local_addr()));
+        handle.notify_listening(Some(incoming.local_addr().unwrap()));
 
         let accept_loop_future = async {
             loop {
-                let addr_stream = tokio::select! {
+                let (tcp_stream, socket_addr) = tokio::select! {
                     biased;
-                    result = accept(&mut incoming) => result?,
+                    result = accept(&mut incoming) => result,
                     _ = handle.wait_graceful_shutdown() => return Ok(()),
                 };
 
@@ -181,29 +157,27 @@ impl<A> Server<A> {
                     .await
                     .map_err(io_other)?;
 
-                let service = match make_service.make_service(&addr_stream).await {
+                let service = match make_service.make_service(&socket_addr).await {
                     Ok(service) => service,
                     Err(_) => continue,
                 };
 
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
-                let http_conf = http_conf.clone();
 
                 tokio::spawn(async move {
-                    if let Ok((stream, send_service)) = acceptor.accept(addr_stream, service).await
-                    {
+                    if let Ok((stream, send_service)) = acceptor.accept(tcp_stream, service).await {
+                        let io = TokioIo::new(stream);
                         let service = send_service.into_service();
+                        let service = TowerToHyperService::new(service);
 
-                        let mut serve_future = http_conf
-                            .inner
-                            .serve_connection(stream, service)
-                            .with_upgrades();
+                        let builder = Builder::new(TokioExecutor::new());
+                        let serve_future = builder.serve_connection_with_upgrades(io, service);
+                        tokio::pin!(serve_future);
 
                         tokio::select! {
                             biased;
                             _ = watcher.wait_graceful_shutdown() => {
-                                Pin::new(&mut serve_future).graceful_shutdown();
                                 tokio::select! {
                                     biased;
                                     _ = watcher.wait_shutdown() => (),
@@ -234,36 +208,23 @@ impl<A> Server<A> {
     }
 }
 
-async fn bind_incoming(
-    listener: Listener,
-    addr_incoming_conf: AddrIncomingConfig,
-) -> io::Result<AddrIncoming> {
-    let listener = match listener {
-        Listener::Bind(addr) => TcpListener::bind(addr).await?,
+async fn bind_incoming(listener: Listener) -> io::Result<TcpListener> {
+    match listener {
+        Listener::Bind(addr) => TcpListener::bind(addr).await,
         Listener::Std(std_listener) => {
             std_listener.set_nonblocking(true)?;
-            TcpListener::from_std(std_listener)?
+            TcpListener::from_std(std_listener)
         }
-    };
-    let mut incoming = AddrIncoming::from_listener(listener).map_err(io_other)?;
-
-    incoming.set_sleep_on_errors(addr_incoming_conf.tcp_sleep_on_accept_errors);
-    incoming.set_keepalive(addr_incoming_conf.tcp_keepalive);
-    incoming.set_keepalive_interval(addr_incoming_conf.tcp_keepalive_interval);
-    incoming.set_keepalive_retries(addr_incoming_conf.tcp_keepalive_retries);
-    incoming.set_nodelay(addr_incoming_conf.tcp_nodelay);
-
-    Ok(incoming)
+    }
 }
 
-pub(crate) async fn accept(incoming: &mut AddrIncoming) -> io::Result<AddrStream> {
-    let mut incoming = Pin::new(incoming);
-
-    // Always [`Option::Some`].
-    // https://docs.rs/hyper/0.14.14/src/hyper/server/tcp.rs.html#165
-    poll_fn(|cx| incoming.as_mut().poll_accept(cx))
-        .await
-        .unwrap()
+pub(crate) async fn accept(listener: &mut TcpListener) -> (TcpStream, SocketAddr) {
+    loop {
+        match listener.accept().await {
+            Ok(value) => return value,
+            Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
 }
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -275,20 +236,20 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 #[cfg(test)]
 mod tests {
     use crate::{handle::Handle, server::Server};
+    use axum::body::Body;
     use axum::{routing::get, Router};
     use bytes::Bytes;
     use http::{response, Request};
-    use hyper::{
-        client::conn::{handshake, SendRequest},
-        Body,
-    };
+    use http_body_util::BodyExt;
+    use hyper::client::conn::http1::handshake;
+    use hyper::client::conn::http1::SendRequest;
+    use hyper_util::rt::TokioIo;
     use std::{io, net::SocketAddr, time::Duration};
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
-    use tower::{Service, ServiceExt};
 
     #[tokio::test]
     async fn start_and_request() {
-        let (_handle, _server_task, addr) = start_server().await;
+        let (_handle, _server_task, addr) = start_server(0).await;
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -299,18 +260,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let (handle, _server_task, addr) = start_server().await;
+        let (handle, _server_task, addr) = start_server(1).await;
 
         let (mut client, conn) = connect(addr).await;
 
         handle.shutdown();
 
-        let response_future_result = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
-            .await;
+        client.ready().await.unwrap();
+        let response_future_result = client.send_request(Request::new(Body::empty())).await;
 
         assert!(response_future_result.is_err());
 
@@ -320,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graceful_shutdown() {
-        let (handle, server_task, addr) = start_server().await;
+        let (handle, server_task, addr) = start_server(2).await;
 
         let (mut client, conn) = connect(addr).await;
 
@@ -342,10 +299,9 @@ mod tests {
         assert!(server_result.is_ok());
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_graceful_shutdown_timed() {
-        let (handle, server_task, addr) = start_server().await;
+        let (handle, server_task, addr) = start_server(3).await;
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -367,14 +323,14 @@ mod tests {
         assert!(server_result.is_ok());
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server(port: u16) -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(|| async { "Hello, world!" }));
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 9000 + port));
 
             Server::bind(addr)
                 .handle(server_handle)
@@ -388,8 +344,7 @@ mod tests {
     }
 
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
-        let stream = TcpStream::connect(addr).await.unwrap();
-
+        let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
         let (send_request, connection) = handshake(stream).await.unwrap();
 
         let task = tokio::spawn(async move {
@@ -400,15 +355,13 @@ mod tests {
     }
 
     async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
+        client.ready().await.unwrap();
         let (parts, body) = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
+            .send_request(Request::new(Body::empty()))
             .await
             .unwrap()
             .into_parts();
-        let body = hyper::body::to_bytes(body).await.unwrap();
+        let body = body.collect().await.unwrap().to_bytes();
 
         (parts, body)
     }
