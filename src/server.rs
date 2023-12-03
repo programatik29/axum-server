@@ -2,7 +2,7 @@ use crate::{
     accept::{Accept, DefaultAcceptor},
     handle::Handle,
     service::TowerToHyperService,
-    service::{MakeServiceRef, SendService},
+    service::{MakeService, SendService},
 };
 use futures_util::future::poll_fn;
 use http::Request;
@@ -126,7 +126,7 @@ impl<A> Server<A> {
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
-        M: MakeServiceRef<SocketAddr, Request<Incoming>>,
+        M: MakeService<SocketAddr, Request<Incoming>>,
         A: Accept<TcpStream, M::Service> + Clone + Send + Sync + 'static,
         A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
         A::Service: SendService<Request<Incoming>> + Send,
@@ -157,7 +157,7 @@ impl<A> Server<A> {
                     .await
                     .map_err(io_other)?;
 
-                let service = match make_service.make_service(&socket_addr).await {
+                let service = match make_service.make_service(socket_addr).await {
                     Ok(service) => service,
                     Err(_) => continue,
                 };
@@ -249,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_and_request() {
-        let (_handle, _server_task, addr) = start_server(0).await;
+        let (_handle, _server_task, addr) = start_server().await;
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -260,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let (handle, _server_task, addr) = start_server(1).await;
+        let (handle, _server_task, addr) = start_server().await;
 
         let (mut client, conn) = connect(addr).await;
 
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graceful_shutdown() {
-        let (handle, server_task, addr) = start_server(2).await;
+        let (handle, server_task, addr) = start_server().await;
 
         let (mut client, conn) = connect(addr).await;
 
@@ -301,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graceful_shutdown_timed() {
-        let (handle, server_task, addr) = start_server(3).await;
+        let (handle, server_task, addr) = start_server().await;
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -323,14 +323,14 @@ mod tests {
         assert!(server_result.is_ok());
     }
 
-    async fn start_server(port: u16) -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(|| async { "Hello, world!" }));
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 9000 + port));
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
             Server::bind(addr)
                 .handle(server_handle)

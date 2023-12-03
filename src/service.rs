@@ -78,7 +78,7 @@ where
 ///
 /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
 #[allow(missing_docs)]
-pub trait MakeServiceRef<Target, Request>: make_service_ref::Sealed<(Target, Request)> {
+pub trait MakeService<Target, Request>: make_service_ref::Sealed<(Target, Request)> {
     type Service: Service<
             Request,
             Response = Response<Self::Body>,
@@ -102,12 +102,12 @@ pub trait MakeServiceRef<Target, Request>: make_service_ref::Sealed<(Target, Req
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::MakeError>>;
 
-    fn make_service(&mut self, target: &Target) -> Self::MakeFuture;
+    fn make_service(&mut self, target: Target) -> Self::MakeFuture;
 }
 
 impl<T, S, B, E, F, Target, Request> make_service_ref::Sealed<(Target, Request)> for T
 where
-    T: for<'a> Service<&'a Target, Response = S, Error = E, Future = F>,
+    T: Service<Target, Response = S, Error = E, Future = F>,
     S: Service<Request, Response = Response<B>> + Send + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     S::Future: Send + 'static,
@@ -119,9 +119,9 @@ where
 {
 }
 
-impl<T, S, B, E, F, Target, Request> MakeServiceRef<Target, Request> for T
+impl<T, S, B, E, F, Target, Request> MakeService<Target, Request> for T
 where
-    T: for<'a> Service<&'a Target, Response = S, Error = E, Future = F>,
+    T: Service<Target, Response = S, Error = E, Future = F>,
     S: Service<Request, Response = Response<B>> + Send + Clone + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     S::Future: Send + 'static,
@@ -148,7 +148,7 @@ where
         self.poll_ready(cx)
     }
 
-    fn make_service(&mut self, target: &Target) -> Self::MakeFuture {
+    fn make_service(&mut self, target: Target) -> Self::MakeFuture {
         self.call(target)
     }
 }
