@@ -143,7 +143,7 @@ impl<A> Server<A> {
             }
         };
 
-        handle.notify_listening(Some(incoming.local_addr().unwrap()));
+        handle.notify_listening(incoming.local_addr().ok());
 
         let accept_loop_future = async {
             loop {
