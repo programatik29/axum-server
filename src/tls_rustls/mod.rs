@@ -96,11 +96,11 @@ impl RustlsAcceptor {
         let inner = DefaultAcceptor::new();
 
         #[cfg(not(test))]
-        let handshake_timeout = Duration::from_secs(10);
+            let handshake_timeout = Duration::from_secs(10);
 
         // Don't force tests to wait too long.
         #[cfg(test)]
-        let handshake_timeout = Duration::from_secs(1);
+            let handshake_timeout = Duration::from_secs(1);
 
         Self {
             inner,
@@ -128,9 +128,9 @@ impl<A> RustlsAcceptor<A> {
 }
 
 impl<A, I, S> Accept<I, S> for RustlsAcceptor<A>
-where
-    A: Accept<I, S>,
-    A::Stream: AsyncRead + AsyncWrite + Unpin,
+    where
+        A: Accept<I, S>,
+        A::Stream: AsyncRead + AsyncWrite + Unpin,
 {
     type Stream = TlsStream<A::Stream>;
     type Service = A::Service;
@@ -283,12 +283,13 @@ fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig>
 fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
     use rustls_pemfile::Item;
 
-    let cert = rustls_pemfile::certs(&mut cert.as_ref())?;
+    let cert = rustls_pemfile::certs(&mut cert.as_ref()).map(|it| it.map(|it| it.to_vec())).collect::<Result<Vec<_>, _>>()?;
     // Check the entire PEM file for the key in case it is not first section
-    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())?
-        .into_iter()
-        .filter_map(|i| match i {
-            Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) => Some(key),
+    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())
+        .filter_map(|i| match i.ok()? {
+            Item::Sec1Key(key) => Some(key.secret_sec1_der().to_vec()),
+            Item::Pkcs1Key(key) => Some(key.secret_pkcs1_der().to_vec().into()),
+            Item::Pkcs8Key(key) => Some(key.secret_pkcs8_der().to_vec().into()),
             _ => None,
         })
         .collect();
@@ -376,8 +377,8 @@ mod tests {
             "examples/self-signed-certs/cert.pem",
             "examples/self-signed-certs/key.pem",
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         let server_handle = handle.clone();
         let rustls_config = config.clone();
@@ -505,7 +506,7 @@ mod tests {
                 "examples/self-signed-certs/cert.pem",
                 "examples/self-signed-certs/key.pem",
             )
-            .await?;
+                .await?;
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
@@ -565,7 +566,7 @@ mod tests {
                 _end_entity: &Certificate,
                 _intermediates: &[Certificate],
                 _server_name: &ServerName,
-                _scts: &mut dyn Iterator<Item = &[u8]>,
+                _scts: &mut dyn Iterator<Item=&[u8]>,
                 _ocsp_response: &[u8],
                 _now: SystemTime,
             ) -> Result<ServerCertVerified, rustls::Error> {
