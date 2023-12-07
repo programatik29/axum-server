@@ -5,6 +5,8 @@ use std::{
     io,
 };
 
+use tokio::net::TcpStream;
+
 /// An asynchronous function to modify io stream and service.
 pub trait Accept<I, S> {
     /// IO stream produced by accept.
@@ -38,5 +40,26 @@ impl<I, S> Accept<I, S> for DefaultAcceptor {
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
         std::future::ready(Ok((stream, service)))
+    }
+}
+
+/// An acceptor that sets `TCP_NODELAY` on accepted streams.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDelayAcceptor;
+
+impl NoDelayAcceptor {
+    /// Create a new acceptor that sets `TCP_NODELAY` on accepted streams.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<S> Accept<TcpStream, S> for NoDelayAcceptor {
+    type Stream = TcpStream;
+    type Service = S;
+    type Future = Ready<io::Result<(Self::Stream, Self::Service)>>;
+
+    fn accept(&self, stream: TcpStream, service: S) -> Self::Future {
+        std::future::ready(stream.set_nodelay(true).and(Ok((stream, service))))
     }
 }
