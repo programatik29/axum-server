@@ -12,6 +12,7 @@ use hyper_util::{
     server::conn::auto::Builder,
 };
 use std::{
+    fmt,
     io::{self, ErrorKind},
     net::SocketAddr,
     time::Duration,
@@ -22,11 +23,25 @@ use tokio::{
 };
 
 /// HTTP server.
-#[derive(Debug)]
 pub struct Server<A = DefaultAcceptor> {
     acceptor: A,
+    builder: Builder<TokioExecutor>,
     listener: Listener,
     handle: Handle,
+}
+
+// Builder doesn't implement Debug or Clone right now
+impl<A> fmt::Debug for Server<A>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Server")
+            .field("acceptor", &self.acceptor)
+            .field("listener", &self.listener)
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -49,10 +64,12 @@ impl Server {
     /// Create a server that will bind to provided address.
     pub fn bind(addr: SocketAddr) -> Self {
         let acceptor = DefaultAcceptor::new();
+        let builder = Builder::new(TokioExecutor::new());
         let handle = Handle::new();
 
         Self {
             acceptor,
+            builder,
             listener: Listener::Bind(addr),
             handle,
         }
@@ -61,10 +78,12 @@ impl Server {
     /// Create a server from existing `std::net::TcpListener`.
     pub fn from_tcp(listener: std::net::TcpListener) -> Self {
         let acceptor = DefaultAcceptor::new();
+        let builder = Builder::new(TokioExecutor::new());
         let handle = Handle::new();
 
         Self {
             acceptor,
+            builder,
             listener: Listener::Std(listener),
             handle,
         }
@@ -76,6 +95,7 @@ impl<A> Server<A> {
     pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> Server<Acceptor> {
         Server {
             acceptor,
+            builder: self.builder,
             listener: self.listener,
             handle: self.handle,
         }
@@ -88,6 +108,7 @@ impl<A> Server<A> {
     {
         Server {
             acceptor: acceptor(self.acceptor),
+            builder: self.builder,
             listener: self.listener,
             handle: self.handle,
         }
@@ -101,6 +122,11 @@ impl<A> Server<A> {
     /// Returns a mutable reference to the acceptor.
     pub fn get_mut(&mut self) -> &mut A {
         &mut self.acceptor
+    }
+
+    /// Returns a mutable reference to the Http builder.
+    pub fn http_builder(&mut self) -> &mut Builder<TokioExecutor> {
+        &mut self.builder
     }
 
     /// Provide a handle for additional utilities.
@@ -134,6 +160,7 @@ impl<A> Server<A> {
     {
         let acceptor = self.acceptor;
         let handle = self.handle;
+        let builder = std::sync::Arc::new(self.builder);
 
         let mut incoming = match bind_incoming(self.listener).await {
             Ok(v) => v,
@@ -164,6 +191,7 @@ impl<A> Server<A> {
 
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
+                let builder = builder.clone();
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(tcp_stream, service).await {
@@ -171,7 +199,6 @@ impl<A> Server<A> {
                         let service = send_service.into_service();
                         let service = TowerToHyperService::new(service);
 
-                        let builder = Builder::new(TokioExecutor::new());
                         let serve_future = builder.serve_connection_with_upgrades(io, service);
                         tokio::pin!(serve_future);
 
