@@ -2,7 +2,7 @@
 authors = ["Programatik <programatik29@gmail.com>"]
 categories = ["asynchronous", "network-programming", "web-programming"]
 description = "High level server designed to be used with axum framework."
-edition = "2018"
+edition = "2021"
 homepage = "https://github.com/programatik29/axum-server"
 keywords = ["http", "https", "web", "server"]
 license = "MIT"
