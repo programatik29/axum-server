@@ -29,7 +29,7 @@ pub struct DefaultAcceptor;
 impl DefaultAcceptor {
     /// Create a new default acceptor.
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
@@ -50,7 +50,7 @@ pub struct NoDelayAcceptor;
 impl NoDelayAcceptor {
     /// Create a new acceptor that sets `TCP_NODELAY` on accepted streams.
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
