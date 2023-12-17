@@ -225,6 +225,8 @@ impl<A> Server<A> {
             result = accept_loop_future => result,
         };
 
+        // attempting to do a "result?;" requires us to specify the type of result which is annoying
+        #[allow(clippy::question_mark)]
         if let Err(e) = result {
             return Err(e);
         }
