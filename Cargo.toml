@@ -13,8 +13,8 @@ version = "0.5.1"
 
 [features]
 default = []
-tls-rustls = ["arc-swap", "pin-project-lite", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
-tls-openssl = ["arc-swap", "openssl", "tokio-openssl", "pin-project-lite"]
+tls-rustls = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
+tls-openssl = ["arc-swap", "openssl", "tokio-openssl"]
 
 [dependencies]
 bytes = "1"
