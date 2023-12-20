@@ -34,7 +34,10 @@ use crate::{
 use arc_swap::ArcSwap;
 use openssl::{
     pkey::PKey,
-    ssl::{self, AlpnError, Error as OpenSSLError, SslAcceptor, SslAcceptorBuilder, SslFiletype, SslMethod, SslRef},
+    ssl::{
+        self, AlpnError, Error as OpenSSLError, SslAcceptor, SslAcceptorBuilder, SslFiletype,
+        SslMethod, SslRef,
+    },
     x509::X509,
 };
 use std::{convert::TryFrom, fmt, net::SocketAddr, path::Path, sync::Arc, time::Duration};
@@ -158,7 +161,9 @@ impl OpenSSLConfig {
         chain: impl AsRef<Path>,
         key: impl AsRef<Path>,
     ) -> Result<Self, OpenSSLError> {
-        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_pem_chain_file(chain, key)?));
+        let acceptor = Arc::new(ArcSwap::from_pointee(config_from_pem_chain_file(
+            chain, key,
+        )?));
 
         Ok(OpenSSLConfig { acceptor })
     }

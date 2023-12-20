@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog], and this project adheres to
   - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem`
   - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem_file`
   - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem_chain_file`
+- **added**: `from_pem_chain_file` method for `RustlsConfig`.
 - **breaking**: Removed `HttpConfig` and `AddrIncomingConfig`.
 - **breaking**: Updated `axum` from `0.6` to `0.7`.
 - **breaking**: Updated `hyper` from `1.0.1`.
