@@ -1,5 +1,5 @@
 [package]
-authors = ["Programatik <programatik29@gmail.com>"]
+authors = ["Programatik <programatik29@gmail.com>", "Adi Salimgereev <adisalimgereev@gmail.com>"]
 categories = ["asynchronous", "network-programming", "web-programming"]
 description = "High level server designed to be used with axum framework."
 edition = "2021"
@@ -9,7 +9,7 @@ license = "MIT"
 name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
-version = "0.5.1"
+version = "0.6.0"
 
 [features]
 default = []

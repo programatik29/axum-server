@@ -5,9 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
-# Unreleased
+# 0.6.0 (21. December 2023)
 
-None.
+- **added**: functionalities in `tls_openssl`, that were added as they appeared to be only in `tls_rustls`:
+  - `axum_server::tls_openssl::OpenSSLConfig::from_acceptor`
+  - `axum_server::tls_openssl::OpenSSLConfig::from_der`
+  - `axum_server::tls_openssl::OpenSSLConfig::from_pem`
+  - `axum_server::tls_openssl::OpenSSLConfig::get_inner`
+  - `axum_server::tls_openssl::OpenSSLConfig::reload_from_der`
+  - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem`
+  - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem_file`
+  - `axum_server::tls_openssl::OpenSSLConfig::reload_from_pem_chain_file`
+- **breaking**: Removed `HttpConfig` and `AddrIncomingConfig`.
+- **breaking**: Updated `axum` from `0.6` to `0.7`.
+- **breaking**: Updated `hyper` from `1.0.1`.
 
 # 0.5.1 (15. May 2023)
 
