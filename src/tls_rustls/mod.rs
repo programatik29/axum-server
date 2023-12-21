@@ -294,15 +294,14 @@ fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig>
 }
 
 fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
-    let cert = rustls_pemfile::certs(&mut cert.as_ref())
-        .map(|it| it.map(|it| it.to_vec()))
-        .collect::<Result<Vec<_>, _>>()?;
+    use rustls_pemfile::Item;
+
+    let cert = rustls_pemfile::certs(&mut cert.as_ref())?;
     // Check the entire PEM file for the key in case it is not first section
-    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())
-        .filter_map(|i| match i.ok()? {
-            Item::Sec1Key(key) => Some(key.secret_sec1_der().to_vec()),
-            Item::Pkcs1Key(key) => Some(key.secret_pkcs1_der().to_vec().into()),
-            Item::Pkcs8Key(key) => Some(key.secret_pkcs8_der().to_vec().into()),
+    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())?
+        .into_iter()
+        .filter_map(|i| match i {
+            Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) => Some(key),
             _ => None,
         })
         .collect();
