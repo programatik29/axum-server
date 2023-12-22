@@ -354,9 +354,9 @@ async fn config_from_pem_chain_file(
 mod tests {
     use crate::handle::Handle;
     use crate::tls_rustls::{self, RustlsConfig};
+    use axum::body::Body;
     use axum::routing::get;
     use axum::Router;
-    use axum::body::Body;
     use bytes::Bytes;
     use http::{response, Request};
     use http_body_util::BodyExt;
@@ -469,9 +469,7 @@ mod tests {
 
         handle.shutdown();
 
-        let response_future_result = client
-            .send_request(Request::new(Body::empty()))
-            .await;
+        let response_future_result = client.send_request(Request::new(Body::empty())).await;
 
         assert!(response_future_result.is_err());
 
