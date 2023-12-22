@@ -41,7 +41,7 @@ You can find more examples [here](/examples).
 
 ## Minimum Supported Rust Version
 
-axum-server's MSRV is `1.49`.
+axum-server's MSRV is `1.63`.
 
 ## Safety
 
