@@ -352,17 +352,16 @@ async fn config_from_pem_chain_file(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        handle::Handle,
-        tls_rustls::{self, RustlsConfig},
-    };
-    use axum::{routing::get, Router};
+    use crate::handle::Handle;
+    use crate::tls_rustls::{self, RustlsConfig};
+    use axum::routing::get;
+    use axum::Router;
+    use axum::body::Body;
     use bytes::Bytes;
     use http::{response, Request};
-    use hyper::{
-        client::conn::{handshake, SendRequest},
-        Body,
-    };
+    use http_body_util::BodyExt;
+    use hyper::client::conn::http1::{handshake, SendRequest};
+    use hyper_util::rt::TokioIo;
     use rustls::{
         client::{ServerCertVerified, ServerCertVerifier},
         Certificate, ClientConfig, ServerName,
@@ -377,7 +376,6 @@ mod tests {
     use tokio::time::sleep;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tokio_rustls::TlsConnector;
-    use tower::{Service, ServiceExt};
 
     #[tokio::test]
     async fn start_and_request() {
@@ -472,10 +470,7 @@ mod tests {
         handle.shutdown();
 
         let response_future_result = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
+            .send_request(Request::new(Body::empty()))
             .await;
 
         assert!(response_future_result.is_err());
@@ -570,7 +565,7 @@ mod tests {
 
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
         let stream = TcpStream::connect(addr).await.unwrap();
-        let tls_stream = tls_connector().connect(dns_name(), stream).await.unwrap();
+        let tls_stream = TokioIo::new(tls_connector().connect(dns_name(), stream).await.unwrap());
 
         let (send_request, connection) = handshake(tls_stream).await.unwrap();
 
@@ -583,14 +578,11 @@ mod tests {
 
     async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
         let (parts, body) = client
-            .ready()
-            .await
-            .unwrap()
-            .call(Request::new(Body::empty()))
+            .send_request(Request::new(Body::empty()))
             .await
             .unwrap()
             .into_parts();
-        let body = hyper::body::to_bytes(body).await.unwrap();
+        let body = body.collect().await.unwrap().to_bytes();
 
         (parts, body)
     }
