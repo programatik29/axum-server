@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 - **added**: `from_pem_chain_file` method for `RustlsConfig`.
 - **breaking**: Removed `HttpConfig` and `AddrIncomingConfig`.
 - **breaking**: Updated `axum` from `0.6` to `0.7`.
-- **breaking**: Updated `hyper` from `1.0.1`.
+- **breaking**: Updated `hyper` to `1.0.1`.
 
 # 0.5.1 (15. May 2023)
 
