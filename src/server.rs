@@ -225,6 +225,11 @@ impl<A> Server<A> {
             result = accept_loop_future => result,
         };
 
+        // Tokio internally accepts TCP connections while the TCPListener is active;
+        // drop the listener to immediately refuse connections rather than letting
+        // them hang.
+        drop(incoming);
+
         // attempting to do a "result?;" requires us to specify the type of result which is annoying
         #[allow(clippy::question_mark)]
         if let Err(e) = result {
