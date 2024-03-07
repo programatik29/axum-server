@@ -91,6 +91,17 @@ impl OpenSSLAcceptor {
     }
 }
 
+impl<A> OpenSSLAcceptor<A> {
+    /// Overwrite inner acceptor.
+    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> OpenSSLAcceptor<Acceptor> {
+        OpenSSLAcceptor {
+            inner: acceptor,
+            config: self.config,
+            handshake_timeout: self.handshake_timeout,
+        }
+    }
+}
+
 impl<A, I, S> Accept<I, S> for OpenSSLAcceptor<A>
 where
     A: Accept<I, S>,
