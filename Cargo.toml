@@ -11,9 +11,12 @@ readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
 version = "0.6.0"
 
+[patch.crates-io]
+tokio-rustls = { git = "https://github.com/rustls/tokio-rustls", rev = "3a153acec6c4d189eb5de501b2155b4484b8651b" } # main
+
 [features]
 default = []
-tls-rustls = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
+tls-rustls = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "dep:tokio-rustls"]
 tls-openssl = ["arc-swap", "openssl", "tokio-openssl"]
 
 [dependencies]
@@ -36,7 +39,7 @@ tower = { version = "0.4", features = ["util"] }
 arc-swap = { version = "1", optional = true }
 rustls = { version = "0.23.1", default-features = false, optional = true }
 rustls-pemfile = { version = "2.1.0", default-features = false, optional = true }
-tokio-rustls = { git = "https://github.com/rustls/tokio-rustls", default-features = false, rev = "214a2b477e642c520c243717188cb683a9cad900", optional = true }
+tokio-rustls = { version = "0.25", default-features = false, features = ["ring"], optional = true }
 
 ## openssl
 openssl = { version = "0.10", optional = true }
