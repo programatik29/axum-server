@@ -44,6 +44,7 @@ use tokio::{
 use tokio_rustls::server::TlsStream;
 
 pub(crate) mod export {
+    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     /// Create a tls server that will bind to provided address.
@@ -301,8 +302,8 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
     let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())
         .filter_map(|i| match i.ok()? {
             Item::Sec1Key(key) => Some(key.secret_sec1_der().to_vec()),
-            Item::Pkcs1Key(key) => Some(key.secret_pkcs1_der().to_vec().into()),
-            Item::Pkcs8Key(key) => Some(key.secret_pkcs8_der().to_vec().into()),
+            Item::Pkcs1Key(key) => Some(key.secret_pkcs1_der().to_vec()),
+            Item::Pkcs8Key(key) => Some(key.secret_pkcs8_der().to_vec()),
             _ => None,
         })
         .collect();
@@ -337,7 +338,7 @@ async fn config_from_pem_chain_file(
     let key_cert: rustls::PrivateKey = match rustls_pemfile::read_one(&mut key.as_ref())?
         .ok_or_else(|| io_other("could not parse pem file"))?
     {
-        Item::Pkcs8Key(key) => Ok(rustls::PrivateKey(key.secret_pkcs8_der().to_vec().into())),
+        Item::Pkcs8Key(key) => Ok(rustls::PrivateKey(key.secret_pkcs8_der().to_vec())),
         x => Err(io_other(format!(
             "invalid certificate format, received: {x:?}"
         ))),
