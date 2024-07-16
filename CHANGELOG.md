@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# 0.6.1 (16. July 2024)
+
+- **changed**: Updated `rustls` from `0.21` to `0.23`.
+- **changed**: Updated `tokio-rustls` from `0.24` to `0.26`.
+- **changed**: Updated `hyper` from `1.0.1` to `1.4`.
+- **changed**: Updated `http` from `1.0.0` to `1.1`.
+- **added**: `rustls-pki-types` dependency for the `tls-rustls` feature.
+- **changed**: Replaced usage of `rustls::Certificate` and `rustls::PrivateKey` with `rustls_pki_types::CertificateDer` and `rustls_pki_types::PrivateKeyDer`.
+- **changed**: Updated `ServerConfig` initialization to remove `with_safe_defaults()` call.
+- **changed**: Updated `ClientConfig` initialization in tests to use `dangerous()` instead of `with_safe_defaults()`.
+- **changed**: Updated `ServerCertVerifier` implementation in tests to match new rustls API.
+- **changed**: Minor version bumps for various dependencies including `rustls-pemfile`, `serial_test`, and `tower-http`.
+
 # 0.6.0 (21. December 2023)
 
 - **added**: functionalities in `tls_openssl`, that were added as they appeared to be only in `tls_rustls`:
