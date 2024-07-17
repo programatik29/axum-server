@@ -365,15 +365,9 @@ mod tests {
     use hyper_util::rt::TokioIo;
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
-    use rustls_pki_types::{CertificateDer, ServerName};
-    use std::fmt::{Debug, Formatter};
-    use std::{
-        convert::TryFrom,
-        io,
-        net::SocketAddr,
-        sync::Arc,
-        time::{Duration, SystemTime},
-    };
+    use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+    use std::fmt::Debug;
+    use std::{convert::TryFrom, io, net::SocketAddr, sync::Arc, time::Duration};
     use tokio::time::sleep;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
     use tokio_rustls::TlsConnector;
@@ -553,7 +547,7 @@ mod tests {
         (handle, server_task, addr)
     }
 
-    async fn get_first_cert(addr: SocketAddr) -> CertificateDer {
+    async fn get_first_cert(addr: SocketAddr) -> CertificateDer<'static> {
         let stream = TcpStream::connect(addr).await.unwrap();
         let tls_stream = tls_connector().connect(dns_name(), stream).await.unwrap();
 
@@ -597,25 +591,25 @@ mod tests {
                 _intermediates: &[CertificateDer],
                 _server_name: &ServerName,
                 _ocsp_response: &[u8],
-                _now: SystemTime,
+                _now: UnixTime,
             ) -> Result<ServerCertVerified, rustls::Error> {
                 Ok(ServerCertVerified::assertion())
             }
 
             fn verify_tls12_signature(
                 &self,
-                message: &[u8],
-                cert: &CertificateDer<'_>,
-                dss: &DigitallySignedStruct,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
             ) -> Result<HandshakeSignatureValid, Error> {
                 Ok(HandshakeSignatureValid::assertion())
             }
 
             fn verify_tls13_signature(
                 &self,
-                message: &[u8],
-                cert: &CertificateDer<'_>,
-                dss: &DigitallySignedStruct,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
             ) -> Result<HandshakeSignatureValid, Error> {
                 Ok(HandshakeSignatureValid::assertion())
             }
@@ -643,7 +637,7 @@ mod tests {
         TlsConnector::from(Arc::new(client_config))
     }
 
-    fn dns_name() -> ServerName {
+    fn dns_name() -> ServerName<'static> {
         ServerName::try_from("localhost").unwrap()
     }
 }
