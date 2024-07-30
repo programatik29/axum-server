@@ -1,0 +1,30 @@
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+    tags:
+      - '*'
+
+jobs:
+  check_cargo_fmt:
+    name: Check that 'cargo fmt' has been run
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  check_cargo_clippy:
+    name: Check that 'cargo clippy' has no warnings
+    runs-on: ubuntu-22.04
+    steps:
+      - run: sudo apt-get install pkg-config libssl-dev
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets --all-features -- -Dwarnings
