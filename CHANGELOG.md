@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
-# 0.6.1 (16. July 2024)
+# 0.7.0 (16. July 2024)
 
+- **fixed**: Graceful shutdown now stops accepting requests from existing connections.
 - **changed**: Updated `rustls` from `0.21` to `0.23`.
 - **changed**: Updated `tokio-rustls` from `0.24` to `0.26`.
 - **changed**: Updated `hyper` from `1.0.1` to `1.4`.
