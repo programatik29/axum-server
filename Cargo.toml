@@ -9,11 +9,11 @@ license = "MIT"
 name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
-version = "0.6.0"
+version = "0.6.1"
 
 [features]
 default = []
-tls-rustls = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls"]
+tls-rustls = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls", "rustls-pki-types"]
 tls-openssl = ["arc-swap", "openssl", "tokio-openssl"]
 
 [dependencies]
@@ -21,34 +21,35 @@ bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = [
   "alloc",
 ] }
-http = "1.0.0"
-http-body = "1.0.0"
-hyper = { version = "1.0.1", features = ["http1", "http2", "server"] }
+http = "1.1"
+http-body = "1.0"
+hyper = { version = "1.4", features = ["http1", "http2", "server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
-http-body-util = "0.1.0"
-hyper-util = { version = "0.1.1", features = ["server-auto", "tokio"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 pin-project-lite = "0.2"
 tower = { version = "0.4", features = ["util"] }
 
 # optional dependencies
 ## rustls
 arc-swap = { version = "1", optional = true }
-rustls = { version = "0.21", features = ["dangerous_configuration"], optional = true }
-rustls-pemfile = { version = "2.0.0", optional = true }
-tokio-rustls = { version = "0.24", optional = true }
+rustls = { version = "0.23", optional = true }
+rustls-pki-types = { version = "1.7", optional = true }
+rustls-pemfile = { version = "2.1", optional = true }
+tokio-rustls = { version = "0.26", optional = true }
 
 ## openssl
 openssl = { version = "0.10", optional = true }
 tokio-openssl = { version = "0.6", optional = true }
 
 [dev-dependencies]
-serial_test = "2.0"
+serial_test = "3.1"
 axum = "0.7"
-hyper = { version = "1.0.1", features = ["full"] }
+hyper = { version = "1.4", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5.0", features = ["add-extension"] }
+tower-http = { version = "0.5", features = ["add-extension"] }
 
 [package.metadata.docs.rs]
 all-features = true

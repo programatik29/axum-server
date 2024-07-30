@@ -205,6 +205,7 @@ impl<A> Server<A> {
                         tokio::select! {
                             biased;
                             _ = watcher.wait_graceful_shutdown() => {
+                                serve_future.as_mut().graceful_shutdown();
                                 tokio::select! {
                                     biased;
                                     _ = watcher.wait_shutdown() => (),
@@ -271,14 +272,19 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 mod tests {
     use crate::{handle::Handle, server::Server};
     use axum::body::Body;
+    use axum::response::Response;
+    use axum::routing::post;
     use axum::{routing::get, Router};
     use bytes::Bytes;
-    use http::{response, Request};
-    use http_body_util::BodyExt;
+    use futures_util::{stream, StreamExt};
+    use http::{Method, Request, Uri};
+    use http_body::Frame;
+    use http_body_util::{BodyExt, StreamBody};
     use hyper::client::conn::http1::handshake;
     use hyper::client::conn::http1::SendRequest;
     use hyper_util::rt::TokioIo;
     use std::{io, net::SocketAddr, time::Duration};
+    use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 
     #[tokio::test]
@@ -287,9 +293,13 @@ mod tests {
 
         let (mut client, _conn) = connect(addr).await;
 
-        let (_parts, body) = send_empty_request(&mut client).await;
+        // Client can send requests
 
-        assert_eq!(body.as_ref(), b"Hello, world!");
+        do_empty_request(&mut client).await.unwrap();
+
+        do_slow_request(&mut client, Duration::from_millis(50))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -298,63 +308,126 @@ mod tests {
 
         let (mut client, conn) = connect(addr).await;
 
+        // Client can send request before shutdown.
+        do_empty_request(&mut client).await.unwrap();
+
         handle.shutdown();
 
-        client.ready().await.unwrap();
-        let response_future_result = client.send_request(Request::new(Body::empty())).await;
+        // After shutdown, all client requests should fail.
+        do_empty_request(&mut client).await.unwrap_err();
 
-        assert!(response_future_result.is_err());
-
-        // Connection task should finish soon.
+        // Connection should finish soon.
         let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
     }
 
+    // Test graceful shutdown with no timeout.
     #[tokio::test]
-    async fn test_graceful_shutdown() {
+    async fn test_graceful_shutdown_no_timeout() {
         let (handle, server_task, addr) = start_server().await;
 
-        let (mut client, conn) = connect(addr).await;
+        let (mut client1, _conn1) = connect(addr).await;
+        let (mut client2, _conn2) = connect(addr).await;
 
-        handle.graceful_shutdown(None);
+        // Clients can send request before graceful shutdown.
+        do_empty_request(&mut client1).await.unwrap();
+        do_empty_request(&mut client2).await.unwrap();
 
-        let (_parts, body) = send_empty_request(&mut client).await;
+        let start = tokio::time::Instant::now();
 
-        assert_eq!(body.as_ref(), b"Hello, world!");
+        let (hdr1_tx, hdr1_rx) = oneshot::channel::<()>();
 
-        // Disconnect client.
-        conn.abort();
+        let fut1 = async {
+            // A slow request made before graceful shutdown is handled.
+            // Since there's no request timeout, this can take as long as it
+            // needs.
+            let hdr1 = send_slow_request(&mut client1, Duration::from_millis(500))
+                .await
+                .unwrap();
+            hdr1_tx.send(()).unwrap();
+            recv_slow_response_body(hdr1).await.unwrap();
+
+            assert!(start.elapsed() >= Duration::from_millis(500));
+        };
+        let fut2 = async {
+            // Graceful shutdown partway through
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            hdr1_rx.await.unwrap();
+            handle.graceful_shutdown(None);
+
+            // Any new requests after graceful shutdown begins will fail
+            do_empty_request(&mut client2).await.unwrap_err();
+            do_empty_request(&mut client2).await.unwrap_err();
+            do_empty_request(&mut client2).await.unwrap_err();
+        };
+
+        tokio::join!(fut1, fut2);
+
+        // At this point, graceful shutdown must have occured, and the slow
+        // request must have finished. Since there was no timeout, the elapsed
+        // time should be at least 500 ms (slow request duration).
+        assert!(start.elapsed() >= Duration::from_millis(500 + 100));
 
         // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
+        timeout(Duration::from_secs(1), server_task)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
-
-        assert!(server_result.is_ok());
     }
 
+    // Test graceful shutdown with a timeout.
     #[tokio::test]
-    async fn test_graceful_shutdown_timed() {
+    async fn test_graceful_shutdown_timeout() {
         let (handle, server_task, addr) = start_server().await;
 
-        let (mut client, _conn) = connect(addr).await;
+        let (mut client1, _conn1) = connect(addr).await;
+        let (mut client2, _conn2) = connect(addr).await;
 
-        handle.graceful_shutdown(Some(Duration::from_millis(250)));
+        // Clients can send request before graceful shutdown.
+        do_empty_request(&mut client1).await.unwrap();
+        do_empty_request(&mut client2).await.unwrap();
 
-        let (_parts, body) = send_empty_request(&mut client).await;
+        let start = tokio::time::Instant::now();
 
-        assert_eq!(body.as_ref(), b"Hello, world!");
+        let (hdr1_tx, hdr1_rx) = oneshot::channel::<()>();
 
-        // Don't disconnect client.
-        // conn.abort();
+        let task1 = async {
+            // A slow request made before graceful shutdown is handled.
+            // This one is shorter than the timeout, so it should succeed.
+            let hdr1 = send_slow_request(&mut client1, Duration::from_millis(222)).await;
+            hdr1_tx.send(()).unwrap();
 
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
+            let res1 = recv_slow_response_body(hdr1.unwrap()).await;
+            res1.unwrap();
+        };
+        let task2 = async {
+            // A slow request made before graceful shutdown is handled.
+            // This one is much longer than the timeout; it should fail sometime
+            // after the graceful shutdown timeout.
 
-        assert!(server_result.is_ok());
+            let hdr2 = send_slow_request(&mut client2, Duration::from_millis(5_555)).await;
+            hdr2.unwrap_err();
+        };
+        let task3 = async {
+            // Begin graceful shutdown after we receive response headers for (1).
+            hdr1_rx.await.unwrap();
+
+            // Set a timeout on requests to finish before we drop them.
+            handle.graceful_shutdown(Some(Duration::from_millis(333)));
+
+            // Server task should finish soon.
+            timeout(Duration::from_secs(1), server_task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // At this point, graceful shutdown must have occured.
+            assert!(start.elapsed() >= Duration::from_millis(222 + 333));
+            assert!(start.elapsed() <= Duration::from_millis(5_555));
+        };
+
+        tokio::join!(task1, task2, task3);
     }
 
     async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
@@ -362,7 +435,15 @@ mod tests {
 
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
-            let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+            let app = Router::new()
+                .route("/", get(|| async { "Hello, world!" }))
+                .route(
+                    "/echo_slowly",
+                    post(|body: Bytes| async move {
+                        // Stream a response slowly, byte-by-byte, over 100ms
+                        Response::new(slow_body(body.len(), Duration::from_millis(100)))
+                    }),
+                );
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
@@ -388,15 +469,64 @@ mod tests {
         (send_request, task)
     }
 
-    async fn send_empty_request(client: &mut SendRequest<Body>) -> (response::Parts, Bytes) {
-        client.ready().await.unwrap();
-        let (parts, body) = client
-            .send_request(Request::new(Body::empty()))
-            .await
-            .unwrap()
-            .into_parts();
-        let body = body.collect().await.unwrap().to_bytes();
+    // Send a basic `GET /` request.
+    async fn do_empty_request(client: &mut SendRequest<Body>) -> hyper::Result<()> {
+        client.ready().await?;
 
-        (parts, body)
+        let body = client
+            .send_request(Request::new(Body::empty()))
+            .await?
+            .into_body();
+
+        let body = body.collect().await?.to_bytes();
+        assert_eq!(body.as_ref(), b"Hello, world!");
+        Ok(())
+    }
+
+    // Send a request with a body streamed byte-by-byte, over a given duration,
+    // then wait for the full response.
+    async fn do_slow_request(
+        client: &mut SendRequest<Body>,
+        duration: Duration,
+    ) -> hyper::Result<()> {
+        let response = send_slow_request(client, duration).await?;
+        recv_slow_response_body(response).await
+    }
+
+    async fn send_slow_request(
+        client: &mut SendRequest<Body>,
+        duration: Duration,
+    ) -> hyper::Result<http::Response<hyper::body::Incoming>> {
+        let req_body_len: usize = 10;
+        let mut req = Request::new(slow_body(req_body_len, duration));
+        *req.method_mut() = Method::POST;
+        *req.uri_mut() = Uri::from_static("/echo_slowly");
+
+        client.ready().await?;
+        client.send_request(req).await
+    }
+
+    async fn recv_slow_response_body(
+        response: http::Response<hyper::body::Incoming>,
+    ) -> hyper::Result<()> {
+        let resp_body = response.into_body();
+        let resp_body_bytes = resp_body.collect().await?.to_bytes();
+        assert_eq!(10, resp_body_bytes.len());
+        Ok(())
+    }
+
+    // A stream of n response data `Frame`s, where n = `length`, and each frame
+    // consists of a single byte. The whole response is smeared out over
+    // a `duration` length of time.
+    fn slow_body(length: usize, duration: Duration) -> axum::body::Body {
+        let frames =
+            (0..length).map(move |_| Ok::<_, hyper::Error>(Frame::data(Bytes::from_static(b"X"))));
+
+        let stream = stream::iter(frames).then(move |frame| async move {
+            tokio::time::sleep(duration / (length as u32)).await;
+            frame
+        });
+
+        axum::body::Body::new(StreamBody::new(stream))
     }
 }

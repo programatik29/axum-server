@@ -33,8 +33,9 @@ use crate::{
     server::{io_other, Server},
 };
 use arc_swap::ArcSwap;
-use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls::ServerConfig;
 use rustls_pemfile::Item;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::time::Duration;
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
 use tokio::{
@@ -280,11 +281,10 @@ impl fmt::Debug for RustlsConfig {
 }
 
 fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig> {
-    let cert = cert.into_iter().map(Certificate).collect();
-    let key = PrivateKey(key);
+    let cert = cert.into_iter().map(CertificateDer::from).collect();
+    let key = PrivateKeyDer::try_from(key).map_err(io_other)?;
 
     let mut config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert, key)
         .map_err(io_other)?;
@@ -332,20 +332,21 @@ async fn config_from_pem_chain_file(
 ) -> io::Result<ServerConfig> {
     let cert = tokio::fs::read(cert.as_ref()).await?;
     let cert = rustls_pemfile::certs(&mut cert.as_ref())
-        .map(|it| it.map(|it| rustls::Certificate(it.to_vec())))
+        .map(|it| it.map(|it| CertificateDer::from(it.to_vec())))
         .collect::<Result<Vec<_>, _>>()?;
     let key = tokio::fs::read(chain.as_ref()).await?;
-    let key_cert: rustls::PrivateKey = match rustls_pemfile::read_one(&mut key.as_ref())?
+    let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
         .ok_or_else(|| io_other("could not parse pem file"))?
     {
-        Item::Pkcs8Key(key) => Ok(rustls::PrivateKey(key.secret_pkcs8_der().to_vec())),
+        Item::Pkcs8Key(key) => {
+            Ok(PrivateKeyDer::try_from(key.secret_pkcs8_der().to_vec()).map_err(io_other)?)
+        }
         x => Err(io_other(format!(
             "invalid certificate format, received: {x:?}"
         ))),
     }?;
 
     ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert, key_cert)
         .map_err(|_| io_other("invalid certificate"))
@@ -363,19 +364,13 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::client::conn::http1::{handshake, SendRequest};
     use hyper_util::rt::TokioIo;
-    use rustls::{
-        client::{ServerCertVerified, ServerCertVerifier},
-        Certificate, ClientConfig, ServerName,
-    };
-    use std::{
-        convert::TryFrom,
-        io,
-        net::SocketAddr,
-        sync::Arc,
-        time::{Duration, SystemTime},
-    };
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
+    use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+    use std::fmt::Debug;
+    use std::{convert::TryFrom, io, net::SocketAddr, sync::Arc, time::Duration};
     use tokio::time::sleep;
-    use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+    use tokio::{net::TcpStream, task::JoinHandle};
     use tokio_rustls::TlsConnector;
 
     #[tokio::test]
@@ -462,71 +457,6 @@ mod tests {
         assert_eq!(cert_a, cert_b);
     }
 
-    #[tokio::test]
-    async fn test_shutdown() {
-        let (handle, _server_task, addr) = start_server().await;
-
-        let (mut client, conn) = connect(addr).await;
-
-        handle.shutdown();
-
-        let response_future_result = client.send_request(Request::new(Body::empty())).await;
-
-        assert!(response_future_result.is_err());
-
-        // Connection task should finish soon.
-        let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_graceful_shutdown() {
-        let (handle, server_task, addr) = start_server().await;
-
-        let (mut client, conn) = connect(addr).await;
-
-        handle.graceful_shutdown(None);
-
-        let (_parts, body) = send_empty_request(&mut client).await;
-
-        assert_eq!(body.as_ref(), b"Hello, world!");
-
-        // Disconnect client.
-        conn.abort();
-
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(server_result.is_ok());
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_graceful_shutdown_timed() {
-        let (handle, server_task, addr) = start_server().await;
-
-        let (mut client, _conn) = connect(addr).await;
-
-        handle.graceful_shutdown(Some(Duration::from_millis(250)));
-
-        let (_parts, body) = send_empty_request(&mut client).await;
-
-        assert_eq!(body.as_ref(), b"Hello, world!");
-
-        // Don't disconnect client.
-        // conn.abort();
-
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(server_result.is_ok());
-    }
-
     async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
@@ -553,7 +483,7 @@ mod tests {
         (handle, server_task, addr)
     }
 
-    async fn get_first_cert(addr: SocketAddr) -> Certificate {
+    async fn get_first_cert(addr: SocketAddr) -> CertificateDer<'static> {
         let stream = TcpStream::connect(addr).await.unwrap();
         let tls_stream = tls_connector().connect(dns_name(), stream).await.unwrap();
 
@@ -587,24 +517,54 @@ mod tests {
     }
 
     fn tls_connector() -> TlsConnector {
+        #[derive(Debug)]
         struct NoVerify;
 
         impl ServerCertVerifier for NoVerify {
             fn verify_server_cert(
                 &self,
-                _end_entity: &Certificate,
-                _intermediates: &[Certificate],
+                _end_entity: &CertificateDer,
+                _intermediates: &[CertificateDer],
                 _server_name: &ServerName,
-                _scts: &mut dyn Iterator<Item = &[u8]>,
                 _ocsp_response: &[u8],
-                _now: SystemTime,
+                _now: UnixTime,
             ) -> Result<ServerCertVerified, rustls::Error> {
                 Ok(ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+                vec![
+                    SignatureScheme::RSA_PKCS1_SHA1,
+                    SignatureScheme::RSA_PKCS1_SHA256,
+                    SignatureScheme::RSA_PKCS1_SHA384,
+                    SignatureScheme::RSA_PKCS1_SHA512,
+                    SignatureScheme::RSA_PSS_SHA256,
+                    SignatureScheme::RSA_PSS_SHA384,
+                    SignatureScheme::RSA_PSS_SHA512,
+                ]
             }
         }
 
         let mut client_config = ClientConfig::builder()
-            .with_safe_defaults()
+            .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoVerify))
             .with_no_client_auth();
 
@@ -613,7 +573,7 @@ mod tests {
         TlsConnector::from(Arc::new(client_config))
     }
 
-    fn dns_name() -> ServerName {
+    fn dns_name() -> ServerName<'static> {
         ServerName::try_from("localhost").unwrap()
     }
 }
