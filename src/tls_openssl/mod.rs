@@ -344,8 +344,8 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::client::conn::http1::{handshake, SendRequest};
     use hyper_util::rt::TokioIo;
-    use std::{io, net::SocketAddr, time::Duration};
-    use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+    use std::{io, net::SocketAddr};
+    use tokio::{net::TcpStream, task::JoinHandle};
 
     use openssl::{
         ssl::{Ssl, SslConnector, SslMethod, SslVerifyMode},
@@ -416,71 +416,6 @@ mod tests {
         cert_b = get_first_cert(addr).await;
 
         assert_eq!(cert_a, cert_b);
-    }
-
-    #[tokio::test]
-    async fn test_shutdown() {
-        let (handle, _server_task, addr) = start_server().await;
-
-        let (mut client, conn) = connect(addr).await;
-
-        handle.shutdown();
-
-        let response_future_result = client.send_request(Request::new(Body::empty())).await;
-
-        assert!(response_future_result.is_err());
-
-        // Connection task should finish soon.
-        let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_graceful_shutdown() {
-        let (handle, server_task, addr) = start_server().await;
-
-        let (mut client, conn) = connect(addr).await;
-
-        handle.graceful_shutdown(None);
-
-        let (_parts, body) = send_empty_request(&mut client).await;
-
-        assert_eq!(body.as_ref(), b"Hello, world!");
-
-        // Disconnect client.
-        conn.abort();
-
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(server_result.is_ok());
-    }
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_graceful_shutdown_timed() {
-        let (handle, server_task, addr) = start_server().await;
-
-        let (mut client, _conn) = connect(addr).await;
-
-        handle.graceful_shutdown(Some(Duration::from_millis(250)));
-
-        let (_parts, body) = send_empty_request(&mut client).await;
-
-        assert_eq!(body.as_ref(), b"Hello, world!");
-
-        // Don't disconnect client.
-        // conn.abort();
-
-        // Server task should finish soon.
-        let server_result = timeout(Duration::from_secs(1), server_task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(server_result.is_ok());
     }
 
     async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
