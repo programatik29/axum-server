@@ -27,7 +27,7 @@ hyper = { version = "1.4", features = ["http1", "http2", "server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 http-body-util = "0.1"
-hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+hyper-util = { version = "0.1.2", features = ["server-auto", "tokio"] }
 pin-project-lite = "0.2"
 tower = { version = "0.4", features = ["util"] }
 
