@@ -145,7 +145,7 @@ impl<A> Server<A> {
     ///
     /// - Binding to an address fails.
     /// - `make_service` returns an error when `poll_ready` is called. This never happens on
-    /// [`axum`] make services.
+    ///   [`axum`] make services.
     ///
     /// [`axum`]: https://docs.rs/axum/0.3
     /// [`tower`]: https://docs.rs/tower
