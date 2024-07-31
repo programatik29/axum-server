@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# Unreleased
+
+- **added**: `http1` and `http2` crate feature, both enabled by default.
+- **changed**: Renamed `tls-rustls-no-provider` crate feature to `tls-rustls-no-default`.
+- **removed**: `Server::http_builder()`.
+- **added**: `Server::http1_only()` and `Server::http2_only()`.
+
 # 0.7.1 (31. July 2024)
 
 - **added**: Crate feature `tls-rustls-no-provider`, which enables no `rustls::crypto::CryptoProvider`.
