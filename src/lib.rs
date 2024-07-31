@@ -31,6 +31,7 @@
 //! # Features
 //!
 //! * `tls-rustls` - activate [rustls] support.
+//! * `tls-rustls-no-provider` - activate [rustls] support without a default provider.
 //! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
@@ -107,12 +108,12 @@ pub use self::{
     server::{bind, from_tcp, Server},
 };
 
-#[cfg(feature = "tls-rustls")]
+#[cfg(feature = "tls-rustls-no-provider")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub mod tls_rustls;
 
 #[doc(inline)]
-#[cfg(feature = "tls-rustls")]
+#[cfg(feature = "tls-rustls-no-provider")]
 pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
 
 #[cfg(feature = "tls-openssl")]
