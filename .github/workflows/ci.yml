@@ -111,3 +111,30 @@ jobs:
         run: cargo update -p tokio --precise 1.38.1
       - name: Run Clippy
         run: cargo build ${{ matrix.features.features }}
+
+  test:
+    name: Test ${{ matrix.features.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - { features: "" }
+          - { name: "(`tls-rustls`)", features: --features tls-rustls }
+          - { name: "(`rustls/ring`)", features: "--features tls-rustls-no-provider,rustls/ring" }
+          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
+          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install OpenSSL
+        if: matrix.features.openssl == true
+        run: sudo apt-get install pkg-config libssl-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run Cargo Tests
+        run: cargo test --all-targets ${{ matrix.features.features }} --no-fail-fast
+      - name: Rust Documentation Tests
+        run: cargo test --doc ${{ matrix.features.features }} --no-fail-fast
