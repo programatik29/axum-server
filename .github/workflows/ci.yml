@@ -109,7 +109,7 @@ jobs:
       - name: Fix MSRV dependencies
         if: matrix.rust.msrv == true
         run: cargo update -p tokio --precise 1.38.1
-      - name: Run Clippy
+      - name: Run Cargo Build
         run: cargo build ${{ matrix.features.features }}
 
   test:
@@ -138,3 +138,36 @@ jobs:
         run: cargo test --all-targets ${{ matrix.features.features }} --no-fail-fast
       - name: Rust Documentation Tests
         run: cargo test --doc ${{ matrix.features.features }} --no-fail-fast
+
+  minimal-versions:
+    name: Minimal Versions ${{ matrix.features.name }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: minimal-versions
+
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - { features: "" }
+          - { name: "(`tls-rustls`)", features: --features tls-rustls }
+          - { name: "(`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
+          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
+          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install OpenSSL
+        if: matrix.features.openssl == true
+        run: |
+          sudo apt-get install --allow-downgrades pkg-config libssl-dev=1.1.1j-1ubuntu4
+      - name: Install Nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Update to Minimal Versions
+        run: cargo update -Zminimal-versions
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.66
+      - name: Run Cargo Build
+        run: cargo build ${{ matrix.features.features }}
