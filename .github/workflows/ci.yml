@@ -184,6 +184,6 @@ jobs:
       - name: Update to Minimal Versions
         run: cargo update -Zminimal-versions
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.66
+        uses: dtolnay/rust-toolchain@1.90
       - name: Run Cargo Build
         run: cargo build ${{ matrix.features.features }}
