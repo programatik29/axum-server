@@ -15,6 +15,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install `cargo-audit`
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Run Audit
+        run: cargo audit -D warnings
+
   rustfmt:
     name: Rustfmt
     runs-on: ubuntu-latest
