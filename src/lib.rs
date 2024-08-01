@@ -11,7 +11,7 @@
 //! # Guide
 //!
 //! axum-server can [`serve`] items that implement [`MakeService`] with some additional [trait
-//! bounds](crate::service::MakeServiceRef). Make services that are [created] using [`axum`]
+//! bounds](crate::service::MakeService). Make services that are [created] using [`axum`]
 //! complies with those trait bounds out of the box. Therefore it is more convenient to use this
 //! crate with [`axum`].
 //!
