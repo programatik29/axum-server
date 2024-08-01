@@ -1,0 +1,15 @@
+[package]
+edition = "2021"
+name = "minimal-versions"
+publish = false
+version = "0.0.0"
+
+[features]
+tls-rustls = ["axum-server/tls-rustls"]
+tls-rustls-no-provider = ["axum-server/tls-rustls-no-provider"]
+tls-openssl = ["axum-server/tls-openssl"]
+
+[dependencies]
+axum-server = { path = ".." }
+# `tower` v0.4.0 incorrectly only requires `tower-layer` v0.3.0
+tower-layer = "0.3.1"
