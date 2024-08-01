@@ -10,6 +10,7 @@ name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
 version = "0.7.1"
+rust-version = "1.66"
 
 [features]
 default = []

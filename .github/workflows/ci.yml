@@ -78,3 +78,36 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings ${{ matrix.rust.flags }}
         run: cargo doc --no-deps --document-private-items --lib --examples --all-features
+
+  build:
+    name: Build ${{ matrix.rust.name }} ${{ matrix.features.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - { version: stable, msrv: false }
+          - { name: "MSRV", version: 1.66, msrv: true }
+        features:
+          - { features: "" }
+          - { name: "(`tls-rustls`)", features: --features tls-rustls }
+          - { name: "(`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
+          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
+          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install OpenSSL
+        if: matrix.features.openssl == true
+        run: sudo apt-get install pkg-config libssl-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust.version }}
+      - name: Fix MSRV dependencies
+        if: matrix.rust.msrv == true
+        run: cargo update -p tokio --precise 1.38.1
+      - name: Run Clippy
+        run: cargo build ${{ matrix.features.features }}
