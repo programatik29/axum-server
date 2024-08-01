@@ -1,30 +1,54 @@
+name: CI
+
 on:
   workflow_dispatch:
   pull_request:
   push:
-    branches:
-      - master
-    tags:
-      - '*'
+    branches: [master]
+    tags: ["*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  check_cargo_fmt:
-    name: Check that 'cargo fmt' has been run
-    runs-on: ubuntu-22.04
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --check
+      - name: Rust Rustfmt
+        run: cargo fmt --check
 
-  check_cargo_clippy:
-    name: Check that 'cargo clippy' has no warnings
-    runs-on: ubuntu-22.04
+  clippy:
+    name: Clippy${{ matrix.features.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - { features: "" }
+          - { name: " (`tls-rustls`)", features: --features tls-rustls }
+          - { name: " (`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
+          - { name: " (`tls-openssl`)", features: --features tls-openssl, openssl: true }
+          - { name: " (`--all-features`)", features: --all-features, openssl: true }
+
     steps:
-      - run: sudo apt-get install pkg-config libssl-dev
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - run: cargo clippy --all-targets --all-features -- -Dwarnings
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install OpenSSL
+        if: matrix.features.openssl == true
+        run: sudo apt-get install pkg-config libssl-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run Clippy
+        run: cargo clippy --all-targets ${{ matrix.features.features }} -- -D warnings
