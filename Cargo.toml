@@ -13,10 +13,12 @@ version = "0.7.1"
 rust-version = "1.66"
 
 [features]
-default = []
-tls-rustls = ["tls-rustls-no-provider", "rustls/aws-lc-rs"]
-tls-rustls-no-provider = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls", "rustls-pki-types"]
-tls-openssl = ["arc-swap", "openssl", "tokio-openssl"]
+default = ["http1", "http2"]
+http1 = ["hyper/http1", "hyper-util/http1"]
+http2 = ["hyper/http2", "hyper-util/http2"]
+tls-rustls = ["tls-rustls-no-default", "rustls/aws-lc-rs", "rustls/tls12", "tokio-rustls/aws-lc-rs", "tokio-rustls/tls12"]
+tls-rustls-no-default = ["dep:arc-swap", "dep:rustls", "dep:rustls-pemfile", "tokio/fs", "tokio/time", "dep:tokio-rustls", "dep:rustls-pki-types"]
+tls-openssl = ["dep:arc-swap", "dep:openssl", "dep:tokio-openssl"]
 
 [dependencies]
 bytes = "1"
@@ -25,21 +27,21 @@ futures-util = { version = "0.3", default-features = false, features = [
 ] }
 http = "1.1"
 http-body = "1.0"
-hyper = { version = "1.4", features = ["http1", "http2", "server"] }
+hyper = { version = "1.4", features = ["server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 http-body-util = "0.1"
-hyper-util = { version = "0.1.2", features = ["server-auto", "tokio"] }
+hyper-util = { version = "0.1.2", features = ["server", "tokio"] }
 pin-project-lite = "0.2"
 tower = { version = "0.4", features = ["util"] }
 
 # optional dependencies
 ## rustls
 arc-swap = { version = "1", optional = true }
-rustls = { version = "0.23", default-features = false, optional = true }
+rustls = { version = "0.23", default-features = false, features = ["logging", "std"], optional = true }
 rustls-pki-types = { version = "1.7", optional = true }
 rustls-pemfile = { version = "2.1", optional = true }
-tokio-rustls = { version = "0.26", default-features = false, optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging"], optional = true }
 
 ## openssl
 openssl = { version = "0.10", optional = true }
@@ -48,6 +50,7 @@ tokio-openssl = { version = "0.6", optional = true }
 [dev-dependencies]
 serial_test = "3.1"
 axum = "0.7"
+axum-server = { path = "" }
 hyper = { version = "1.4", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }

@@ -4,7 +4,7 @@ use crate::{
     service::TowerToHyperService,
     service::{MakeService, SendService},
 };
-use futures_util::future::poll_fn;
+use futures_util::future::{poll_fn, Either};
 use http::Request;
 use hyper::body::Incoming;
 use hyper_util::{
@@ -28,6 +28,7 @@ pub struct Server<A = DefaultAcceptor> {
     builder: Builder<TokioExecutor>,
     listener: Listener,
     handle: Handle,
+    http1_only: bool,
 }
 
 // Builder doesn't implement Debug or Clone right now
@@ -40,6 +41,7 @@ where
             .field("acceptor", &self.acceptor)
             .field("listener", &self.listener)
             .field("handle", &self.handle)
+            .field("http1_only", &self.http1_only)
             .finish_non_exhaustive()
     }
 }
@@ -72,6 +74,7 @@ impl Server {
             builder,
             listener: Listener::Bind(addr),
             handle,
+            http1_only: false,
         }
     }
 
@@ -86,6 +89,7 @@ impl Server {
             builder,
             listener: Listener::Std(listener),
             handle,
+            http1_only: false,
         }
     }
 }
@@ -98,6 +102,7 @@ impl<A> Server<A> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
+            http1_only: self.http1_only,
         }
     }
 
@@ -111,6 +116,7 @@ impl<A> Server<A> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
+            http1_only: self.http1_only,
         }
     }
 
@@ -124,9 +130,30 @@ impl<A> Server<A> {
         &mut self.acceptor
     }
 
-    /// Returns a mutable reference to the Http builder.
-    pub fn http_builder(&mut self) -> &mut Builder<TokioExecutor> {
-        &mut self.builder
+    /// Only accepts HTTP/1.
+    #[cfg(feature = "http1")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "http1")))]
+    pub fn http1_only(self) -> Self {
+        Server {
+            acceptor: self.acceptor,
+            builder: self.builder.http1_only(),
+            listener: self.listener,
+            handle: self.handle,
+            http1_only: true,
+        }
+    }
+
+    /// Only accepts HTTP/2.
+    #[cfg(feature = "http2")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "http2")))]
+    pub fn http2_only(self) -> Self {
+        Server {
+            acceptor: self.acceptor,
+            builder: self.builder.http2_only(),
+            listener: self.listener,
+            handle: self.handle,
+            http1_only: false,
+        }
     }
 
     /// Provide a handle for additional utilities.
@@ -199,13 +226,22 @@ impl<A> Server<A> {
                         let service = send_service.into_service();
                         let service = TowerToHyperService::new(service);
 
-                        let serve_future = builder.serve_connection_with_upgrades(io, service);
+                        let serve_future = if self.http1_only {
+                            Either::Left(builder.serve_connection(io, service))
+                        } else {
+                            Either::Right(builder.serve_connection_with_upgrades(io, service))
+                        };
+
                         tokio::pin!(serve_future);
+                        let mut serve_future = serve_future.as_pin_mut();
 
                         tokio::select! {
                             biased;
                             _ = watcher.wait_graceful_shutdown() => {
-                                serve_future.as_mut().graceful_shutdown();
+                                match &mut serve_future {
+                                    Either::Left(serve_future) => serve_future.as_mut().graceful_shutdown(),
+                                    Either::Right(serve_future) => serve_future.as_mut().graceful_shutdown(),
+                                }
                                 tokio::select! {
                                     biased;
                                     _ = watcher.wait_shutdown() => (),
@@ -280,16 +316,15 @@ mod tests {
     use http::{Method, Request, Uri};
     use http_body::Frame;
     use http_body_util::{BodyExt, StreamBody};
-    use hyper::client::conn::http1::handshake;
-    use hyper::client::conn::http1::SendRequest;
-    use hyper_util::rt::TokioIo;
+    use hyper::client::conn::{http1, http2};
+    use hyper_util::rt::{TokioExecutor, TokioIo};
     use std::{io, net::SocketAddr, time::Duration};
     use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 
     #[tokio::test]
     async fn start_and_request() {
-        let (_handle, _server_task, addr) = start_server().await;
+        let (_handle, _server_task, addr) = start_server(false).await;
 
         let (mut client, _conn) = connect(addr).await;
 
@@ -304,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown() {
-        let (handle, _server_task, addr) = start_server().await;
+        let (handle, _server_task, addr) = start_server(false).await;
 
         let (mut client, conn) = connect(addr).await;
 
@@ -323,7 +358,7 @@ mod tests {
     // Test graceful shutdown with no timeout.
     #[tokio::test]
     async fn test_graceful_shutdown_no_timeout() {
-        let (handle, server_task, addr) = start_server().await;
+        let (handle, server_task, addr) = start_server(false).await;
 
         let (mut client1, _conn1) = connect(addr).await;
         let (mut client2, _conn2) = connect(addr).await;
@@ -354,6 +389,9 @@ mod tests {
             hdr1_rx.await.unwrap();
             handle.graceful_shutdown(None);
 
+            // Wait for graceful shutdown to register
+            tokio::time::sleep(Duration::from_millis(250)).await;
+
             // Any new requests after graceful shutdown begins will fail
             do_empty_request(&mut client2).await.unwrap_err();
             do_empty_request(&mut client2).await.unwrap_err();
@@ -378,7 +416,7 @@ mod tests {
     // Test graceful shutdown with a timeout.
     #[tokio::test]
     async fn test_graceful_shutdown_timeout() {
-        let (handle, server_task, addr) = start_server().await;
+        let (handle, server_task, addr) = start_server(false).await;
 
         let (mut client1, _conn1) = connect(addr).await;
         let (mut client2, _conn2) = connect(addr).await;
@@ -430,7 +468,41 @@ mod tests {
         tokio::join!(task1, task2, task3);
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    #[tokio::test]
+    async fn http1() {
+        let (_handle, _server_task, addr) = start_server(true).await;
+
+        // HTTP/2 should fail
+        {
+            let (mut client, _conn) = connect(addr).await;
+            do_empty_request(&mut client).await.unwrap_err();
+        }
+
+        // HTTP/1 should succeed
+        {
+            let (mut client, _conn) = {
+                let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
+                let (send_request, connection) = http1::handshake(stream).await.unwrap();
+                let task = tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                (send_request, task)
+            };
+
+            client.ready().await.unwrap();
+
+            let body = client
+                .send_request(Request::new(Body::empty()))
+                .await
+                .unwrap()
+                .into_body();
+
+            let body = body.collect().await.unwrap().to_bytes();
+            assert_eq!(body.as_ref(), b"Hello, world!");
+        }
+    }
+
+    async fn start_server(http1_only: bool) -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
@@ -447,10 +519,13 @@ mod tests {
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
-            Server::bind(addr)
-                .handle(server_handle)
-                .serve(app.into_make_service())
-                .await
+            let mut server = Server::bind(addr).handle(server_handle);
+
+            if http1_only {
+                server = server.http1_only()
+            }
+
+            server.serve(app.into_make_service()).await
         });
 
         let addr = handle.listening().await.unwrap();
@@ -458,9 +533,11 @@ mod tests {
         (handle, server_task, addr)
     }
 
-    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+    async fn connect(addr: SocketAddr) -> (http2::SendRequest<Body>, JoinHandle<()>) {
         let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
-        let (send_request, connection) = handshake(stream).await.unwrap();
+        let (send_request, connection) = http2::handshake(TokioExecutor::new(), stream)
+            .await
+            .unwrap();
 
         let task = tokio::spawn(async move {
             let _ = connection.await;
@@ -470,7 +547,7 @@ mod tests {
     }
 
     // Send a basic `GET /` request.
-    async fn do_empty_request(client: &mut SendRequest<Body>) -> hyper::Result<()> {
+    async fn do_empty_request(client: &mut http2::SendRequest<Body>) -> hyper::Result<()> {
         client.ready().await?;
 
         let body = client
@@ -486,7 +563,7 @@ mod tests {
     // Send a request with a body streamed byte-by-byte, over a given duration,
     // then wait for the full response.
     async fn do_slow_request(
-        client: &mut SendRequest<Body>,
+        client: &mut http2::SendRequest<Body>,
         duration: Duration,
     ) -> hyper::Result<()> {
         let response = send_slow_request(client, duration).await?;
@@ -494,7 +571,7 @@ mod tests {
     }
 
     async fn send_slow_request(
-        client: &mut SendRequest<Body>,
+        client: &mut http2::SendRequest<Body>,
         duration: Duration,
     ) -> hyper::Result<http::Response<hyper::body::Incoming>> {
         let req_body_len: usize = 10;

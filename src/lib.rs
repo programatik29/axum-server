@@ -30,8 +30,10 @@
 //!
 //! # Features
 //!
+//! * `http1` - enables HTTP/1 support (enabled by default).
+//! * `http2` - enables HTTP/2 support (enabled by default).
 //! * `tls-rustls` - activate [rustls] support.
-//! * `tls-rustls-no-provider` - activate [rustls] support without a default provider.
+//! * `tls-rustls-no-default` - activate [rustls] support without a default crypto provider or TLS v1.2 support.
 //! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
@@ -108,12 +110,12 @@ pub use self::{
     server::{bind, from_tcp, Server},
 };
 
-#[cfg(feature = "tls-rustls-no-provider")]
+#[cfg(feature = "tls-rustls-no-default")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub mod tls_rustls;
 
 #[doc(inline)]
-#[cfg(feature = "tls-rustls-no-provider")]
+#[cfg(feature = "tls-rustls-no-default")]
 pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
 
 #[cfg(feature = "tls-openssl")]
