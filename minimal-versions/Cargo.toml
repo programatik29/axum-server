@@ -11,5 +11,5 @@ tls-openssl = ["axum-server/tls-openssl"]
 
 [dependencies]
 axum-server = { path = ".." }
-# `tower` v0.4.0 incorrectly only requires `tower-layer` v0.3.0
-tower-layer = "0.3.1"
+# `tower` v0.5.0 incorrectly only requires `tower-layer` v0.3.0
+tower-layer = "0.3.3"

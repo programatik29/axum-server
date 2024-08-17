@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# Unreleased
+
+- **changed**: Updated `tower` from `0.4` to `0.5`.
+
 # 0.7.1 (31. July 2024)
 
 - **added**: Crate feature `tls-rustls-no-provider`, which enables no `rustls::crypto::CryptoProvider`.
