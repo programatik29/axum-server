@@ -339,7 +339,13 @@ async fn config_from_pem_chain_file(
         .ok_or_else(|| io_other("could not parse pem file"))?
     {
         Item::Pkcs8Key(key) => {
-            Ok(PrivateKeyDer::try_from(key.secret_pkcs8_der().to_vec()).map_err(io_other)?)
+            Ok(PrivateKeyDer::from(key))
+        }
+        Item::Sec1Key(key) => {
+            Ok(PrivateKeyDer::from(key))
+        }
+        Item::Pkcs1Key(key) => {
+            Ok(PrivateKeyDer::from(key))
         }
         x => Err(io_other(format!(
             "invalid certificate format, received: {x:?}"
