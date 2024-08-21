@@ -338,9 +338,9 @@ async fn config_from_pem_chain_file(
     let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
         .ok_or_else(|| io_other("could not parse pem file"))?
     {
-        Item::Pkcs8Key(key) => {
-            Ok(PrivateKeyDer::try_from(key.secret_pkcs8_der().to_vec()).map_err(io_other)?)
-        }
+        Item::Pkcs8Key(key) => Ok(key.into()),
+        Item::Sec1Key(key) => Ok(key.into()),
+        Item::Pkcs1Key(key) => Ok(key.into()),
         x => Err(io_other(format!(
             "invalid certificate format, received: {x:?}"
         ))),
