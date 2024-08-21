@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 # Unreleased
 
 - **changed**: Updated `tower` from `0.4` to `0.5`.
+- **added**: Support `Pkcs1` and `Sec1` private keys with rustls.
 
 # 0.7.1 (31. July 2024)
 
