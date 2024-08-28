@@ -1,7 +1,6 @@
 use crate::{
     accept::{Accept, DefaultAcceptor},
     handle::Handle,
-    service::TowerToHyperService,
     service::{MakeService, SendService},
 };
 use futures_util::future::poll_fn;
@@ -10,6 +9,7 @@ use hyper::body::Incoming;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder,
+    service::TowerToHyperService,
 };
 use std::{
     fmt,
