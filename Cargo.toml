@@ -28,7 +28,6 @@ http-body = "1.0"
 hyper = { version = "1.4", features = ["http1", "http2", "server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
-http-body-util = "0.1"
 hyper-util = { version = "0.1.2", features = ["server-auto", "service", "tokio"] }
 
 # optional dependencies
@@ -48,6 +47,7 @@ pin-project-lite = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serial_test = "3.1"
+http-body-util = "0.1"
 axum = "0.7"
 hyper = { version = "1.4", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
