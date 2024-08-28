@@ -3,7 +3,6 @@ use crate::{
     handle::Handle,
     service::{MakeService, SendService},
 };
-use futures_util::future::poll_fn;
 use http::Request;
 use hyper::body::Incoming;
 use hyper_util::{
@@ -13,6 +12,7 @@ use hyper_util::{
 };
 use std::{
     fmt,
+    future::poll_fn,
     io::{self, ErrorKind},
     net::SocketAddr,
     time::Duration,
