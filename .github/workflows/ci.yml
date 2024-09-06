@@ -122,7 +122,9 @@ jobs:
           toolchain: ${{ matrix.rust.version }}
       - name: Fix MSRV dependencies
         if: matrix.rust.msrv == true
-        run: cargo update -p tokio --precise 1.38.1
+        run: |
+          cargo update -p tokio --precise 1.38.1
+          cargo update -p tokio-util --precise 0.7.11
       - name: Run Cargo Build
         run: cargo build ${{ matrix.features.features }}
 
