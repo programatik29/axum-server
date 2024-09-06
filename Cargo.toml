@@ -20,17 +20,12 @@ tls-openssl = ["arc-swap", "openssl", "tokio-openssl", "dep:pin-project-lite"]
 
 [dependencies]
 bytes = "1"
-futures-util = { version = "0.3", default-features = false, features = [
-  "alloc",
-] }
 http = "1.1"
 http-body = "1.0"
 hyper = { version = "1.4", features = ["http1", "http2", "server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
-http-body-util = "0.1"
 hyper-util = { version = "0.1.2", features = ["server-auto", "service", "tokio"] }
-tower = { version = "0.5", features = ["util"] }
 
 # optional dependencies
 ## rustls
@@ -49,6 +44,8 @@ pin-project-lite = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serial_test = "3.1"
+futures-util = { version = "0.3", default-features = false }
+http-body-util = "0.1"
 axum = "0.7"
 hyper = { version = "1.4", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
