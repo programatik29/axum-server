@@ -1,5 +1,8 @@
 [package]
-authors = ["Programatik <programatik29@gmail.com>", "Adi Salimgereev <adisalimgereev@gmail.com>"]
+authors = [
+    "Programatik <programatik29@gmail.com>",
+    "Adi Salimgereev <adisalimgereev@gmail.com>",
+]
 categories = ["asynchronous", "network-programming", "web-programming"]
 description = "High level server designed to be used with axum framework."
 edition = "2021"
@@ -14,8 +17,18 @@ rust-version = "1.66"
 
 [features]
 default = []
-tls-rustls = ["tls-rustls-no-provider", "rustls/aws-lc-rs"]
-tls-rustls-no-provider = ["arc-swap", "rustls", "rustls-pemfile", "tokio/fs", "tokio/time", "tokio-rustls", "rustls-pki-types", "dep:pin-project-lite"]
+tls-rustls = ["tls-rustls-no-provider", "rustls/ring"]
+tls-rustls-aws = ["tls-rustls-no-provider", "rustls/aws-lc-rs"]
+tls-rustls-no-provider = [
+    "arc-swap",
+    "rustls",
+    "rustls-pemfile",
+    "tokio/fs",
+    "tokio/time",
+    "tokio-rustls",
+    "rustls-pki-types",
+    "dep:pin-project-lite",
+]
 tls-openssl = ["arc-swap", "openssl", "tokio-openssl", "dep:pin-project-lite"]
 
 [dependencies]
@@ -25,12 +38,18 @@ http-body = "1.0"
 hyper = { version = "1.4", features = ["http1", "http2", "server"] }
 tokio = { version = "1", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
-hyper-util = { version = "0.1.2", features = ["server-auto", "service", "tokio"] }
+hyper-util = { version = "0.1.2", features = [
+    "server-auto",
+    "service",
+    "tokio",
+] }
 
 # optional dependencies
 ## rustls
 arc-swap = { version = "1", optional = true }
-rustls = { version = "0.23", default-features = false, optional = true }
+rustls = { version = "0.23", default-features = false, features = [
+    "tls12"
+], optional = true }
 rustls-pki-types = { version = "1.7", optional = true }
 rustls-pemfile = { version = "2.1", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, optional = true }
