@@ -129,6 +129,18 @@ impl<A> Server<A> {
         &mut self.builder
     }
 
+    /// Only accepts HTTP/1
+    pub fn http1_only(mut self) -> Self {
+        self.builder = self.builder.http1_only();
+        self
+    }
+
+    /// Only accepts HTTP/2
+    pub fn http2_only(mut self) -> Self {
+        self.builder = self.builder.http2_only();
+        self
+    }
+
     /// Provide a handle for additional utilities.
     pub fn handle(mut self, handle: Handle) -> Self {
         self.handle = handle;
@@ -280,9 +292,10 @@ mod tests {
     use http::{Method, Request, Uri};
     use http_body::Frame;
     use http_body_util::{BodyExt, StreamBody};
-    use hyper::client::conn::http1::handshake;
+    use hyper::client;
     use hyper::client::conn::http1::SendRequest;
-    use hyper_util::rt::TokioIo;
+    use hyper::client::conn::http2;
+    use hyper_util::rt::{TokioExecutor, TokioIo};
     use std::{io, net::SocketAddr, time::Duration};
     use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
@@ -430,7 +443,32 @@ mod tests {
         tokio::join!(task1, task2, task3);
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    #[tokio::test]
+    async fn test_http1_only() {
+        let (_handle, _server_task, addr) =
+            start_server_with_http_version(Some(HttpVersion::Http1)).await;
+
+        let (mut client, _conn) = connect_h1(addr).await;
+
+        do_empty_request(&mut client).await.unwrap();
+
+        do_slow_request(&mut client, Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        let (mut client, _conn) = connect_h2(addr).await;
+        do_empty_request_h2(&mut client).await.unwrap_err();
+    }
+
+    #[derive(PartialEq, Eq)]
+    enum HttpVersion {
+        Http1,
+        Http2,
+    }
+
+    async fn start_server_with_http_version(
+        http_version: Option<HttpVersion>,
+    ) -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
@@ -446,8 +484,15 @@ mod tests {
                 );
 
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let server = Server::bind(addr);
+            let server = match http_version {
+                Some(version) if version == HttpVersion::Http1 => server.http1_only(),
+                Some(version) if version == HttpVersion::Http2 => server.http2_only(),
+                Some(_) => panic!("Invalid HTTP version"),
+                None => server,
+            };
 
-            Server::bind(addr)
+            server
                 .handle(server_handle)
                 .serve(app.into_make_service())
                 .await
@@ -458,9 +503,28 @@ mod tests {
         (handle, server_task, addr)
     }
 
+    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+        start_server_with_http_version(None).await
+    }
+
     async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+        connect_h1(addr).await
+    }
+
+    async fn connect_h1(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
         let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
-        let (send_request, connection) = handshake(stream).await.unwrap();
+        let (send_request, connection) = client::conn::http1::handshake(stream).await.unwrap();
+
+        let task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        (send_request, task)
+    }
+
+    async fn connect_h2(addr: SocketAddr) -> (http2::SendRequest<Body>, JoinHandle<()>) {
+        let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
+        let (send_request, connection) = client::conn::http2::handshake(TokioExecutor::new(), stream).await.unwrap();
 
         let task = tokio::spawn(async move {
             let _ = connection.await;
@@ -471,6 +535,20 @@ mod tests {
 
     // Send a basic `GET /` request.
     async fn do_empty_request(client: &mut SendRequest<Body>) -> hyper::Result<()> {
+        client.ready().await?;
+
+        let body = client
+            .send_request(Request::new(Body::empty()))
+            .await?
+            .into_body();
+
+        let body = body.collect().await?.to_bytes();
+        assert_eq!(body.as_ref(), b"Hello, world!");
+        Ok(())
+    }
+
+    // Send a basic `GET /` request.
+    async fn do_empty_request_h2(client: &mut http2::SendRequest<Body>) -> hyper::Result<()> {
         client.ready().await?;
 
         let body = client
