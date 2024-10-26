@@ -28,6 +28,7 @@ pub struct Server<A = DefaultAcceptor> {
     builder: Builder<TokioExecutor>,
     listener: Listener,
     handle: Handle,
+    http_version: Option<HttpVersion>,
 }
 
 // Builder doesn't implement Debug or Clone right now
@@ -72,6 +73,7 @@ impl Server {
             builder,
             listener: Listener::Bind(addr),
             handle,
+            http_version: None,
         }
     }
 
@@ -86,8 +88,15 @@ impl Server {
             builder,
             listener: Listener::Std(listener),
             handle,
+            http_version: None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum HttpVersion {
+    Http1,
+    Http2,
 }
 
 impl<A> Server<A> {
@@ -98,6 +107,7 @@ impl<A> Server<A> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
+            http_version: None,
         }
     }
 
@@ -111,6 +121,7 @@ impl<A> Server<A> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
+            http_version: None,
         }
     }
 
@@ -131,12 +142,14 @@ impl<A> Server<A> {
 
     /// Only accepts HTTP/1
     pub fn http1_only(mut self) -> Self {
+        self.http_version = Some(HttpVersion::Http1);
         self.builder = self.builder.http1_only();
         self
     }
 
     /// Only accepts HTTP/2
     pub fn http2_only(mut self) -> Self {
+        self.http_version = Some(HttpVersion::Http2);
         self.builder = self.builder.http2_only();
         self
     }
@@ -204,28 +217,51 @@ impl<A> Server<A> {
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
                 let builder = builder.clone();
+                let http_version = self.http_version.clone();
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(tcp_stream, service).await {
                         let io = TokioIo::new(stream);
                         let service = send_service.into_service();
                         let service = TowerToHyperService::new(service);
+                        match http_version {
+                            Some(_) => {
+                                let serve_future = builder.serve_connection(io, service);
+                                tokio::pin!(serve_future);
 
-                        let serve_future = builder.serve_connection_with_upgrades(io, service);
-                        tokio::pin!(serve_future);
-
-                        tokio::select! {
-                            biased;
-                            _ = watcher.wait_graceful_shutdown() => {
-                                serve_future.as_mut().graceful_shutdown();
                                 tokio::select! {
                                     biased;
+                                    _ = watcher.wait_graceful_shutdown() => {
+                                        serve_future.as_mut().graceful_shutdown();
+                                        tokio::select! {
+                                            biased;
+                                            _ = watcher.wait_shutdown() => (),
+                                            _ = &mut serve_future => (),
+                                        }
+                                    }
                                     _ = watcher.wait_shutdown() => (),
                                     _ = &mut serve_future => (),
                                 }
                             }
-                            _ = watcher.wait_shutdown() => (),
-                            _ = &mut serve_future => (),
+                            None => {
+                                let serve_future =
+                                    builder.serve_connection_with_upgrades(io, service);
+                                tokio::pin!(serve_future);
+
+                                tokio::select! {
+                                    biased;
+                                    _ = watcher.wait_graceful_shutdown() => {
+                                        serve_future.as_mut().graceful_shutdown();
+                                        tokio::select! {
+                                            biased;
+                                            _ = watcher.wait_shutdown() => (),
+                                            _ = &mut serve_future => (),
+                                        }
+                                    }
+                                    _ = watcher.wait_shutdown() => (),
+                                    _ = &mut serve_future => (),
+                                }
+                            }
                         }
                     }
                 });
@@ -524,7 +560,10 @@ mod tests {
 
     async fn connect_h2(addr: SocketAddr) -> (http2::SendRequest<Body>, JoinHandle<()>) {
         let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
-        let (send_request, connection) = client::conn::http2::handshake(TokioExecutor::new(), stream).await.unwrap();
+        let (send_request, connection) =
+            client::conn::http2::handshake(TokioExecutor::new(), stream)
+                .await
+                .unwrap();
 
         let task = tokio::spawn(async move {
             let _ = connection.await;
