@@ -226,9 +226,7 @@ impl<A> Server<A> {
                         let service = send_service.into_service();
                         let service = TowerToHyperService::new(service);
                         let serve_future = match http_version {
-                            Some(_) => {
-                                Either::Left(builder.serve_connection(io, service))
-                            }
+                            Some(_) => Either::Left(builder.serve_connection(io, service)),
                             _ => Either::Right(builder.serve_connection_with_upgrades(io, service)),
                         };
                         tokio::pin!(serve_future);
@@ -643,7 +641,6 @@ mod tests {
         client.ready().await?;
         client.send_request(req).await
     }
-
 
     async fn recv_slow_response_body(
         response: http::Response<hyper::body::Incoming>,
