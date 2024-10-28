@@ -218,7 +218,7 @@ impl<A> Server<A> {
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
                 let builder = builder.clone();
-                let http_version = self.http_version.clone();
+                let http_version = self.http_version;
 
                 tokio::spawn(async move {
                     if let Ok((stream, send_service)) = acceptor.accept(tcp_stream, service).await {
@@ -520,9 +520,8 @@ mod tests {
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
             let server = Server::bind(addr);
             let server = match http_version {
-                Some(version) if version == HttpVersion::Http1 => server.http1_only(),
-                Some(version) if version == HttpVersion::Http2 => server.http2_only(),
-                Some(_) => panic!("Invalid HTTP version"),
+                Some(HttpVersion::Http1) => server.http1_only(),
+                Some(HttpVersion::Http2) => server.http2_only(),
                 None => server,
             };
 
