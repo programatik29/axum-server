@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 - **changed**: Updated `tower` from `0.4` to `0.5`.
 - **added**: Support reading PKCS\#1 and SEC1 private keys with Rustls.
+- **added**: Support for http1-only and http2-only servers.
 
 # 0.7.1 (31. July 2024)
 
