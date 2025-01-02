@@ -320,8 +320,8 @@ async fn config_from_pem_file(
     cert: impl AsRef<Path>,
     key: impl AsRef<Path>,
 ) -> io::Result<ServerConfig> {
-    let cert = tokio::fs::read(cert.as_ref()).await?;
-    let key = tokio::fs::read(key.as_ref()).await?;
+    let cert = fs_err::tokio::read(cert.as_ref()).await?;
+    let key = fs_err::tokio::read(key.as_ref()).await?;
 
     config_from_pem(cert, key)
 }
@@ -330,11 +330,11 @@ async fn config_from_pem_chain_file(
     cert: impl AsRef<Path>,
     chain: impl AsRef<Path>,
 ) -> io::Result<ServerConfig> {
-    let cert = tokio::fs::read(cert.as_ref()).await?;
+    let cert = fs_err::tokio::read(cert.as_ref()).await?;
     let cert = rustls_pemfile::certs(&mut cert.as_ref())
         .map(|it| it.map(|it| CertificateDer::from(it.to_vec())))
         .collect::<Result<Vec<_>, _>>()?;
-    let key = tokio::fs::read(chain.as_ref()).await?;
+    let key = fs_err::tokio::read(chain.as_ref()).await?;
     let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
         .ok_or_else(|| io_other("could not parse pem file"))?
     {
@@ -575,5 +575,47 @@ mod tests {
 
     fn dns_name() -> ServerName<'static> {
         ServerName::try_from("localhost").unwrap()
+    }
+
+    #[tokio::test]
+    async fn from_pem_file_not_found() {
+        let err = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/missing.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+
+        let err = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/missing.pem",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+    }
+
+    #[tokio::test]
+    async fn from_pem_file_chain_file_not_found() {
+        let err = RustlsConfig::from_pem_chain_file(
+            "examples/self-signed-certs/missing.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+
+        let err = RustlsConfig::from_pem_chain_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/missing.pem",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
     }
 }
