@@ -14,55 +14,130 @@ use std::{
     fmt,
     future::poll_fn,
     io::{self, ErrorKind},
-    net::SocketAddr,
+    net::SocketAddr as IpSocketAddr,
+    os::unix::net::SocketAddr as UnixSocketAddr,
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UnixListener, UnixStream},
 };
 
 /// HTTP server.
-pub struct Server<A = DefaultAcceptor> {
+pub struct Server<Addr: Address, A = DefaultAcceptor> {
     acceptor: A,
     builder: Builder<TokioExecutor>,
-    listener: Listener,
-    handle: Handle,
+    listener_conf: ListenerConf<Addr>,
+    handle: Handle<Addr>,
 }
 
 // Builder doesn't implement Debug or Clone right now
-impl<A> fmt::Debug for Server<A>
+impl<A: Address, B> fmt::Debug for Server<A, B>
 where
-    A: fmt::Debug,
+    ListenerConf<A>: fmt::Debug,
+    Handle<A>: fmt::Debug,
+    B: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Server")
             .field("acceptor", &self.acceptor)
-            .field("listener", &self.listener)
+            .field("listener_conf", &self.listener_conf)
             .field("handle", &self.handle)
             .finish_non_exhaustive()
     }
 }
 
 #[derive(Debug)]
-enum Listener {
-    Bind(SocketAddr),
-    Std(std::net::TcpListener),
+enum ListenerConf<A: Address> {
+    Bind(A),
+    Ready(A::Listener),
 }
 
 /// Create a [`Server`] that will bind to provided address.
-pub fn bind(addr: SocketAddr) -> Server {
+pub fn bind<A: Address>(addr: A) -> Server<A> {
     Server::bind(addr)
 }
 
 /// Create a [`Server`] from existing `std::net::TcpListener`.
-pub fn from_tcp(listener: std::net::TcpListener) -> Server {
-    Server::from_tcp(listener)
+pub fn from_tcp(listener: std::net::TcpListener) -> io::Result<Server<IpSocketAddr>> {
+    Ok(Server::from_listener(TcpListener::from_std(listener)?))
 }
 
-impl Server {
+/// Create a [`Server`] from existing `std::os::unix::net::UnixListener`.
+pub fn from_unix(listener: std::os::unix::net::UnixListener) -> io::Result<Server<UnixSocketAddr>> {
+    Ok(Server::from_listener(UnixListener::from_std(listener)?))
+}
+
+/// A trait to abstract over a listener that can accept an incoming connection of different types
+/// and can be created from an address.
+pub trait AddrListener<Stream, Addr: Address>: std::marker::Sized {
+    /// Create a new `AddrListener` bound to the given address.
+    fn bind_to(addr: Addr) -> impl std::future::Future<Output = io::Result<Self>> + Send;
+
+    /// Accept an incoming connection, returning the stream and the remote address.
+    fn accept_stream(&self)
+        -> impl std::future::Future<Output = io::Result<(Stream, Addr)>> + Send;
+
+    /// Get the address we're listening on.
+    fn get_local_addr(&self) -> io::Result<Addr>;
+}
+
+impl AddrListener<UnixStream, UnixSocketAddr> for UnixListener {
+    async fn bind_to(addr: UnixSocketAddr) -> io::Result<Self> {
+        UnixListener::bind(addr.as_pathname().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidInput,
+                "A UnixListener can only be bound to a path address!",
+            )
+        })?)
+    }
+
+    async fn accept_stream(&self) -> io::Result<(UnixStream, UnixSocketAddr)> {
+        let (stream, tokio_addr) = self.accept().await?;
+        Ok((stream, tokio_addr.into()))
+    }
+
+    fn get_local_addr(&self) -> io::Result<UnixSocketAddr> {
+        self.local_addr().map(tokio::net::unix::SocketAddr::into)
+    }
+}
+
+impl AddrListener<TcpStream, IpSocketAddr> for TcpListener {
+    async fn bind_to(addr: IpSocketAddr) -> io::Result<Self> {
+        TcpListener::bind(addr).await
+    }
+
+    async fn accept_stream(&self) -> io::Result<(TcpStream, IpSocketAddr)> {
+        self.accept().await
+    }
+
+    fn get_local_addr(&self) -> io::Result<IpSocketAddr> {
+        self.local_addr()
+    }
+}
+
+/// An address which an associated `AddrListener` can bind to.
+pub trait Address: std::marker::Sized + Clone {
+    /// The underlying stream we will obtain once an `AddrListener` is bound to this address.
+    type Stream;
+
+    /// An `AddrListener` that can bind to this `Address`.
+    type Listener: AddrListener<Self::Stream, Self>;
+}
+
+impl Address for UnixSocketAddr {
+    type Stream = UnixStream;
+    type Listener = UnixListener;
+}
+
+impl Address for IpSocketAddr {
+    type Stream = TcpStream;
+    type Listener = TcpListener;
+}
+
+impl<A: Address> Server<A> {
     /// Create a server that will bind to provided address.
-    pub fn bind(addr: SocketAddr) -> Self {
+    pub fn bind(addr: A) -> Self {
         let acceptor = DefaultAcceptor::new();
         let builder = Builder::new(TokioExecutor::new());
         let handle = Handle::new();
@@ -70,13 +145,13 @@ impl Server {
         Self {
             acceptor,
             builder,
-            listener: Listener::Bind(addr),
+            listener_conf: ListenerConf::Bind(addr),
             handle,
         }
     }
 
-    /// Create a server from existing `std::net::TcpListener`.
-    pub fn from_tcp(listener: std::net::TcpListener) -> Self {
+    /// Create a server from an existing `AddrListener`.
+    pub fn from_listener(listener: A::Listener) -> Self {
         let acceptor = DefaultAcceptor::new();
         let builder = Builder::new(TokioExecutor::new());
         let handle = Handle::new();
@@ -84,43 +159,43 @@ impl Server {
         Self {
             acceptor,
             builder,
-            listener: Listener::Std(listener),
+            listener_conf: ListenerConf::Ready(listener),
             handle,
         }
     }
 }
 
-impl<A> Server<A> {
+impl<A: Address, Acc> Server<A, Acc> {
     /// Overwrite acceptor.
-    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> Server<Acceptor> {
+    pub fn acceptor<Acceptor>(self, acceptor: Acceptor) -> Server<A, Acceptor> {
         Server {
             acceptor,
             builder: self.builder,
-            listener: self.listener,
+            listener_conf: self.listener_conf,
             handle: self.handle,
         }
     }
 
     /// Map acceptor.
-    pub fn map<Acceptor, F>(self, acceptor: F) -> Server<Acceptor>
+    pub fn map<Acceptor, F>(self, acceptor: F) -> Server<A, Acceptor>
     where
-        F: FnOnce(A) -> Acceptor,
+        F: FnOnce(Acc) -> Acceptor,
     {
         Server {
             acceptor: acceptor(self.acceptor),
             builder: self.builder,
-            listener: self.listener,
+            listener_conf: self.listener_conf,
             handle: self.handle,
         }
     }
 
     /// Returns a reference to the acceptor.
-    pub fn get_ref(&self) -> &A {
+    pub fn get_ref(&self) -> &Acc {
         &self.acceptor
     }
 
     /// Returns a mutable reference to the acceptor.
-    pub fn get_mut(&mut self) -> &mut A {
+    pub fn get_mut(&mut self) -> &mut Acc {
         &mut self.acceptor
     }
 
@@ -130,7 +205,7 @@ impl<A> Server<A> {
     }
 
     /// Provide a handle for additional utilities.
-    pub fn handle(mut self, handle: Handle) -> Self {
+    pub fn handle(mut self, handle: Handle<A>) -> Self {
         self.handle = handle;
         self
     }
@@ -152,17 +227,19 @@ impl<A> Server<A> {
     /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
-        M: MakeService<SocketAddr, Request<Incoming>>,
-        A: Accept<TcpStream, M::Service> + Clone + Send + Sync + 'static,
-        A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-        A::Service: SendService<Request<Incoming>> + Send,
-        A::Future: Send,
+        M: MakeService<A, Request<Incoming>>,
+        A: Send + 'static,
+        A::Stream: Send,
+        Acc: Accept<A::Stream, M::Service> + Clone + Send + Sync + 'static,
+        Acc::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+        Acc::Service: SendService<Request<Incoming>> + Send,
+        Acc::Future: Send,
     {
         let acceptor = self.acceptor;
         let handle = self.handle;
         let builder = std::sync::Arc::new(self.builder);
 
-        let mut incoming = match bind_incoming(self.listener).await {
+        let mut incoming = match bind_incoming(self.listener_conf).await {
             Ok(v) => v,
             Err(e) => {
                 handle.notify_listening(None);
@@ -170,7 +247,7 @@ impl<A> Server<A> {
             }
         };
 
-        handle.notify_listening(incoming.local_addr().ok());
+        handle.notify_listening(incoming.get_local_addr().ok());
 
         let accept_loop_future = async {
             loop {
@@ -243,19 +320,16 @@ impl<A> Server<A> {
     }
 }
 
-async fn bind_incoming(listener: Listener) -> io::Result<TcpListener> {
+async fn bind_incoming<A: Address>(listener: ListenerConf<A>) -> io::Result<A::Listener> {
     match listener {
-        Listener::Bind(addr) => TcpListener::bind(addr).await,
-        Listener::Std(std_listener) => {
-            std_listener.set_nonblocking(true)?;
-            TcpListener::from_std(std_listener)
-        }
+        ListenerConf::Bind(addr) => A::Listener::bind_to(addr).await,
+        ListenerConf::Ready(listener) => Ok(listener),
     }
 }
 
-pub(crate) async fn accept(listener: &mut TcpListener) -> (TcpStream, SocketAddr) {
+pub(crate) async fn accept<L: AddrListener<S, A>, S, A: Address>(listener: &mut L) -> (S, A) {
     loop {
-        match listener.accept().await {
+        match listener.accept_stream().await {
             Ok(value) => return value,
             Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
         }
@@ -283,7 +357,7 @@ mod tests {
     use hyper::client::conn::http1::handshake;
     use hyper::client::conn::http1::SendRequest;
     use hyper_util::rt::TokioIo;
-    use std::{io, net::SocketAddr, time::Duration};
+    use std::{io, net::SocketAddr as IpSocketAddr, time::Duration};
     use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
 
@@ -430,7 +504,11 @@ mod tests {
         tokio::join!(task1, task2, task3);
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server() -> (
+        Handle<IpSocketAddr>,
+        JoinHandle<io::Result<()>>,
+        IpSocketAddr,
+    ) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
@@ -445,7 +523,7 @@ mod tests {
                     }),
                 );
 
-            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
 
             Server::bind(addr)
                 .handle(server_handle)
@@ -458,7 +536,7 @@ mod tests {
         (handle, server_task, addr)
     }
 
-    async fn connect(addr: SocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
+    async fn connect(addr: IpSocketAddr) -> (SendRequest<Body>, JoinHandle<()>) {
         let stream = TokioIo::new(TcpStream::connect(addr).await.unwrap());
         let (send_request, connection) = handshake(stream).await.unwrap();
 

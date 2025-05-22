@@ -105,7 +105,7 @@ pub use self::{
     // addr_incoming_config::AddrIncomingConfig,
     handle::Handle,
     // http_config::HttpConfig,
-    server::{bind, from_tcp, Server},
+    server::{bind, from_tcp, from_unix, AddrListener, Address, Server},
 };
 
 #[cfg(feature = "tls-rustls-no-provider")]
