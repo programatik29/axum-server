@@ -15,12 +15,17 @@ use std::{
     future::poll_fn,
     io::{self, ErrorKind},
     net::SocketAddr as IpSocketAddr,
-    os::unix::net::SocketAddr as UnixSocketAddr,
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream, UnixListener, UnixStream},
+    net::{TcpListener, TcpStream},
+};
+
+#[cfg(unix)]
+use {
+    std::os::unix::net::SocketAddr as UnixSocketAddr,
+    tokio::net::{UnixListener, UnixStream},
 };
 
 /// HTTP server.
@@ -64,6 +69,7 @@ pub fn from_tcp(listener: std::net::TcpListener) -> io::Result<Server<IpSocketAd
 }
 
 /// Create a [`Server`] from existing `std::os::unix::net::UnixListener`.
+#[cfg(unix)]
 pub fn from_unix(listener: std::os::unix::net::UnixListener) -> io::Result<Server<UnixSocketAddr>> {
     Ok(Server::from_listener(UnixListener::from_std(listener)?))
 }
@@ -82,6 +88,7 @@ pub trait AddrListener<Stream, Addr: Address>: std::marker::Sized {
     fn get_local_addr(&self) -> io::Result<Addr>;
 }
 
+#[cfg(unix)]
 impl AddrListener<UnixStream, UnixSocketAddr> for UnixListener {
     async fn bind_to(addr: UnixSocketAddr) -> io::Result<Self> {
         UnixListener::bind(addr.as_pathname().ok_or_else(|| {
@@ -125,6 +132,7 @@ pub trait Address: std::marker::Sized + Clone {
     type Listener: AddrListener<Self::Stream, Self>;
 }
 
+#[cfg(unix)]
 impl Address for UnixSocketAddr {
     type Stream = UnixStream;
     type Listener = UnixListener;

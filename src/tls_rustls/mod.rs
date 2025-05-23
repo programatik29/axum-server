@@ -68,6 +68,7 @@ pub(crate) mod export {
 
     /// Create a tls server from existing `std::os::unix::net::UnixListener`.
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    #[cfg(unix)]
     pub fn from_unix_rustls(
         listener: std::os::unix::net::UnixListener,
         config: RustlsConfig,
@@ -98,6 +99,7 @@ pub fn from_tcp_rustls(
 }
 
 /// Create a tls server from existing `std::os::unix::net::UnixListener`.
+#[cfg(unix)]
 pub fn from_unix_rustls(
     listener: std::os::unix::net::UnixListener,
     config: RustlsConfig,
