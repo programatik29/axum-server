@@ -114,7 +114,7 @@ pub mod tls_rustls;
 
 #[doc(inline)]
 #[cfg(feature = "tls-rustls-no-provider")]
-pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
+pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls, from_unix_rustls};
 
 #[cfg(feature = "tls-openssl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-openssl")))]
