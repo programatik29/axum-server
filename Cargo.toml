@@ -9,7 +9,7 @@ license = "MIT"
 name = "axum-server"
 readme = "README.md"
 repository = "https://github.com/programatik29/axum-server"
-version = "0.7.3"
+version = "0.7.4"
 rust-version = "1.82"
 
 [features]
@@ -33,7 +33,7 @@ hyper-util = { version = "0.1.2", features = ["server-auto", "service", "tokio"]
 arc-swap = { version = "1", optional = true }
 rustls = { version = "0.23", default-features = false, optional = true }
 rustls-pki-types = { version = "1.7", optional = true }
-rustls-pemfile = { version = "2.1", optional = true }
+rustls-pemfile = { version = "2.2", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, optional = true }
 
 ## openssl
