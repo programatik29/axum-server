@@ -102,7 +102,7 @@ jobs:
       matrix:
         rust:
           - { version: stable, msrv: false }
-          - { name: "MSRV", version: 1.66, msrv: true }
+          - { name: "MSRV", version: 1.82, msrv: true }
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
@@ -186,6 +186,6 @@ jobs:
       - name: Update to Minimal Versions
         run: cargo update -Zminimal-versions
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.66
+        uses: dtolnay/rust-toolchain@1.82
       - name: Run Cargo Build
         run: cargo build ${{ matrix.features.features }}

@@ -249,7 +249,6 @@ impl TryFrom<SslAcceptorBuilder> for OpenSSLConfig {
     ///     // Set configurations like set_certificate_chain_file or
     ///     // set_private_key_file.
     ///     // let tls_builder.set_ ... ;
-
     ///     let _config = OpenSSLConfig::try_from(tls_builder);
     /// }
     /// ```
