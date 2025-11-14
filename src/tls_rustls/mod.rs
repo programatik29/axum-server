@@ -298,22 +298,40 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
     let cert = rustls_pemfile::certs(&mut cert.as_ref())
         .map(|it| it.map(|it| it.to_vec()))
         .collect::<Result<Vec<_>, _>>()?;
-    // Check the entire PEM file for the key in case it is not first section
-    let mut key_vec: Vec<Vec<u8>> = rustls_pemfile::read_all(&mut key.as_ref())
-        .filter_map(|i| match i.ok()? {
-            Item::Sec1Key(key) => Some(key.secret_sec1_der().to_vec()),
-            Item::Pkcs1Key(key) => Some(key.secret_pkcs1_der().to_vec()),
-            Item::Pkcs8Key(key) => Some(key.secret_pkcs8_der().to_vec()),
-            _ => None,
-        })
-        .collect();
 
-    // Make sure file contains only one key
-    if key_vec.len() != 1 {
-        return Err(io_other("private key format not supported"));
+    let mut key_result = Err(io_other("The private key file contained no keys"));
+
+    // Check the entire PEM file for the key in case it is not first section
+    for item in rustls_pemfile::read_all(&mut key.as_ref()) {
+        let key = item.and_then(|i| match i {
+            Item::Sec1Key(key) => Ok(key.secret_sec1_der().to_vec()),
+            Item::Pkcs1Key(key) => Ok(key.secret_pkcs1_der().to_vec()),
+            Item::Pkcs8Key(key) => Ok(key.secret_pkcs8_der().to_vec()),
+            Item::X509Certificate(_) => Err(io_other("Unsupported private key format 'X509Certificate'")),
+            Item::Crl(_) => Err(io_other("Unsupported private key format 'CertificateRevocationList'")),
+            Item::Csr(_) => Err(io_other("Unsupported private key format 'CertificateSigningRequest'")),
+            Item::SubjectPublicKeyInfo(_) => Err(io_other("Unsupported private key format 'SubjectPublicKeyInfo'")),
+            _ => Err(io_other("Unrecognized private key format"))
+        });
+
+        match key_result {
+            // if we already got a key, then...
+            Ok(_) => match key {
+                // ...if we get a key now, we know that there are multiple keys and that's not
+                // allowed
+                Ok(_) => return Err(io_other("The private key file containsed multiple keys (it must only contain one)")),
+                // but if we get an error now and we already have a functioning key, just use the
+                // one we already have
+                Err(_) => ()
+            },
+            // but if already have an error, just overwrite it with whatever we got this time. If
+            // it's a good key, that's cool. If it's an error, then we're just ignoring the old
+            // error in favor of this new one
+            Err(_) => key_result = key
+        }
     }
 
-    config_from_der(cert, key_vec.pop().unwrap())
+    config_from_der(cert, key_result?)
 }
 
 async fn config_from_pem_file(
