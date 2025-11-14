@@ -178,9 +178,8 @@ jobs:
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: |
-          sudo apt-add-repository "deb http://archive.ubuntu.com/ubuntu focal-updates main"
           sudo apt update
-          sudo apt-get install --allow-downgrades pkg-config libssl-dev=1.1.1f-1ubuntu2.23
+          sudo apt-get install pkg-config libssl-dev
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@nightly
       - name: Update to Minimal Versions
