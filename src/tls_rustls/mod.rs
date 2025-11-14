@@ -586,7 +586,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+        assert_eq!(
+            err.to_string(),
+            "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)"
+        );
 
         let err = RustlsConfig::from_pem_file(
             "examples/self-signed-certs/cert.pem",
@@ -595,7 +598,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+        assert_eq!(
+            err.to_string(),
+            "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)"
+        );
     }
 
     #[tokio::test]
@@ -607,7 +613,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+        assert_eq!(
+            err.to_string(),
+            "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)"
+        );
 
         let err = RustlsConfig::from_pem_chain_file(
             "examples/self-signed-certs/cert.pem",
@@ -616,6 +625,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert_eq!(err.to_string(), "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)");
+        assert_eq!(
+            err.to_string(),
+            "failed to read from file `examples/self-signed-certs/missing.pem`: No such file or directory (os error 2)"
+        );
     }
 }
