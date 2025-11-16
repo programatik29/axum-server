@@ -398,7 +398,7 @@ mod tests {
 
         tokio::join!(fut1, fut2);
 
-        // At this point, graceful shutdown must have occured, and the slow
+        // At this point, graceful shutdown must have occurred, and the slow
         // request must have finished. Since there was no timeout, the elapsed
         // time should be at least 500 ms (slow request duration).
         assert!(start.elapsed() >= Duration::from_millis(500 + 100));
@@ -458,7 +458,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            // At this point, graceful shutdown must have occured.
+            // At this point, graceful shutdown must have occurred.
             assert!(start.elapsed() >= Duration::from_millis(222 + 333));
             assert!(start.elapsed() <= Duration::from_millis(5_555));
         };
