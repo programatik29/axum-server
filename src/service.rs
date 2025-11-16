@@ -23,7 +23,7 @@ pub trait SendService<Request>: send_service::Sealed<Request> {
         + 'static;
 
     type Body: Body<Data = Self::BodyData, Error = Self::BodyError> + Send + 'static;
-    type BodyData: Send + 'static;
+    type BodyData: bytes::Buf + Send + 'static;
     type BodyError: Into<Box<dyn std::error::Error + Send + Sync>>;
 
     type Error: Into<Box<dyn std::error::Error + Send + Sync>>;

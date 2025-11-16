@@ -347,7 +347,7 @@ pub(crate) async fn accept<L: AddrListener<S, A>, S, A: Address>(listener: &mut 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
-    io::Error::new(ErrorKind::Other, error)
+    io::Error::other(error)
 }
 
 #[cfg(test)]

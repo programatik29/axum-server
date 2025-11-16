@@ -104,7 +104,7 @@ where
                     }
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
                     Poll::Ready(Err(timeout)) => {
-                        return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, timeout)))
+                        return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, timeout)));
                     }
                     Poll::Pending => return Poll::Pending,
                 },
