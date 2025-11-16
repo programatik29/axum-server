@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
+None.
+
+# 0.7.3 (15. November 2025)
+
+- **fixed**: `axum-server` not compiling in hyper `1.8.0`.
+
+# 0.7.2 (14. March 2025)
+
+- **changed**: Use fs-err to augment errors loading pem files.
 - **changed**: Updated `tower` from `0.4` to `0.5`.
 - **added**: Support reading PKCS\#1 and SEC1 private keys with Rustls.
 - **added**: Support for http1-only and http2-only servers.

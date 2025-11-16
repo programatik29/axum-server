@@ -14,7 +14,7 @@ use hyper_util::{
 use std::{
     fmt,
     future::poll_fn,
-    io::{self, ErrorKind},
+    io::{self},
     net::SocketAddr,
     time::Duration,
 };
@@ -297,7 +297,7 @@ pub(crate) async fn accept(listener: &mut TcpListener) -> (TcpStream, SocketAddr
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
-    io::Error::new(ErrorKind::Other, error)
+    io::Error::other(error)
 }
 
 #[cfg(test)]

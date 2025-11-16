@@ -72,7 +72,8 @@ where
 
                 Poll::Ready(Ok(tls_stream))
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Error::new(ErrorKind::Other, e))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::other(e))),
+
             Poll::Pending => Poll::Pending,
         }
     }
@@ -159,7 +160,7 @@ where
                     }
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
                     Poll::Ready(Err(timeout)) => {
-                        return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, timeout)))
+                        return Poll::Ready(Err(Error::new(ErrorKind::TimedOut, timeout)));
                     }
                     Poll::Pending => return Poll::Pending,
                 },
