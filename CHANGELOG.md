@@ -12,6 +12,7 @@ None.
 # 0.7.4 (16. November 2025)
 
 - **added**: Support for http1-only and http2-only servers.
+- **changed**: Improved error messages that come from parsing pemfiles with rustls.
 
 # 0.7.3 (15. November 2025)
 
