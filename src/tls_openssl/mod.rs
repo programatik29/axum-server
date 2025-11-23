@@ -30,6 +30,7 @@ use self::future::OpenSSLAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     server::Server,
+    Address,
 };
 use arc_swap::ArcSwap;
 use openssl::{
@@ -40,7 +41,7 @@ use openssl::{
     },
     x509::X509,
 };
-use std::{convert::TryFrom, fmt, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{convert::TryFrom, fmt, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_openssl::SslStream;
 
@@ -48,7 +49,7 @@ pub mod future;
 
 /// Create a TLS server that will be bound to the provided socket with a configuration. See
 /// the [`crate::tls_openssl`] module for more details.
-pub fn bind_openssl(addr: SocketAddr, config: OpenSSLConfig) -> Server<OpenSSLAcceptor> {
+pub fn bind_openssl<A: Address>(addr: A, config: OpenSSLConfig) -> Server<A, OpenSSLAcceptor> {
     let acceptor = OpenSSLAcceptor::new(config);
 
     Server::bind(addr).acceptor(acceptor)
@@ -417,7 +418,7 @@ mod tests {
         assert_eq!(cert_a, cert_b);
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server() -> (Handle<SocketAddr>, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
