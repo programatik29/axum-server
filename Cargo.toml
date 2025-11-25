@@ -25,7 +25,7 @@ fs-err = { version = "3", features = ["tokio"] }
 http = "1.1"
 http-body = "1.0"
 hyper = { version = "1.4", features = ["http1", "http2", "server"] }
-tokio = { version = "1", features = ["macros", "net", "sync"] }
+tokio = { version = ">=1.41", features = ["macros", "net", "sync"] }
 tower-service = "0.3"
 hyper-util = { version = "0.1.18", features = ["server-auto", "service", "tokio"] }
 
@@ -51,7 +51,7 @@ futures-util = { version = "0.3", default-features = false }
 http-body-util = "0.1"
 axum = "0.7"
 hyper = { version = "1.4", features = ["full"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = ">=1.41", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["add-extension"] }
 

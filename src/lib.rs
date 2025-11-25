@@ -105,8 +105,11 @@ pub use self::{
     // addr_incoming_config::AddrIncomingConfig,
     handle::Handle,
     // http_config::HttpConfig,
-    server::{bind, from_tcp, Server},
+    server::{bind, from_tcp, AddrListener, Address, Server},
 };
+
+#[cfg(unix)]
+pub use self::server::from_unix;
 
 #[cfg(feature = "tls-rustls-no-provider")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
@@ -115,6 +118,10 @@ pub mod tls_rustls;
 #[doc(inline)]
 #[cfg(feature = "tls-rustls-no-provider")]
 pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
+
+#[doc(inline)]
+#[cfg(all(feature = "tls-rustls-no-provider", unix))]
+pub use self::tls_rustls::export::from_unix_rustls;
 
 #[cfg(feature = "tls-openssl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-openssl")))]

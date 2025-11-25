@@ -13,6 +13,7 @@ async fn main() {
     let listener = TcpListener::bind(addr).unwrap();
     println!("listening on {}", addr);
     axum_server::from_tcp(listener)
+        .unwrap()
         .serve(app.into_make_service())
         .await
         .unwrap();
