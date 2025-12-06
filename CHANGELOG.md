@@ -5,9 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
-# Unreleased
+# 0.8.0 (7. December 2025)
 
-None.
+- **changed**: `Server` is now generic over connections, allowing axum-server to listen not just on TCP. Support for Unix sockets has been implemented and an example for Unix sockets has been provided.
+- **changed**: Changed `rustls-pemfile` with `rustls-pki-types` as it is now unmaintained.
 
 # 0.7.4 (16. November 2025)
 
