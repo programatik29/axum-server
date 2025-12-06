@@ -69,7 +69,7 @@ pin-project-lite = { version = "0.2", optional = true }
 serial_test = "3.1"
 futures-util = { version = "0.3", default-features = false }
 http-body-util = "0.1"
-axum = "0.7"
+axum = "0.8"
 hyper = { version = "1.4", features = ["full"] }
 tokio = { version = ">=1.41", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
