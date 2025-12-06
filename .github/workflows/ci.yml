@@ -53,9 +53,20 @@ jobs:
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
-          - { name: "(`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
-          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
-          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+          - {
+              name: "(`tls-rustls-no-provider`)",
+              features: --features tls-rustls-no-provider,
+            }
+          - {
+              name: "(`tls-openssl`)",
+              features: --features tls-openssl,
+              openssl: true,
+            }
+          - {
+              name: "(`--all-features`)",
+              features: --all-features,
+              openssl: true,
+            }
 
     steps:
       - name: Checkout
@@ -77,8 +88,12 @@ jobs:
       matrix:
         rust:
           - { version: stable }
-          - { name: "with `cfg(docsrs)`", version: nightly, flags: --cfg=docsrs }
-  
+          - {
+              name: "with `cfg(docsrs)`",
+              version: nightly,
+              flags: --cfg=docsrs,
+            }
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -106,9 +121,20 @@ jobs:
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
-          - { name: "(`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
-          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
-          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+          - {
+              name: "(`tls-rustls-no-provider`)",
+              features: --features tls-rustls-no-provider,
+            }
+          - {
+              name: "(`tls-openssl`)",
+              features: --features tls-openssl,
+              openssl: true,
+            }
+          - {
+              name: "(`--all-features`)",
+              features: --all-features,
+              openssl: true,
+            }
 
     steps:
       - name: Checkout
@@ -120,11 +146,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust.version }}
-      - name: Fix MSRV dependencies
-        if: matrix.rust.msrv == true
-        run: |
-          cargo update -p tokio --precise 1.38.1
-          cargo update -p tokio-util --precise 0.7.11
       - name: Run Cargo Build
         run: cargo build ${{ matrix.features.features }}
 
@@ -138,9 +159,20 @@ jobs:
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
-          - { name: "(`rustls/ring`)", features: "--features tls-rustls-no-provider,rustls/ring" }
-          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
-          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+          - {
+              name: "(`rustls/ring`)",
+              features: "--features tls-rustls-no-provider,rustls/ring",
+            }
+          - {
+              name: "(`tls-openssl`)",
+              features: --features tls-openssl,
+              openssl: true,
+            }
+          - {
+              name: "(`--all-features`)",
+              features: --all-features,
+              openssl: true,
+            }
 
     steps:
       - name: Checkout
@@ -168,9 +200,20 @@ jobs:
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
-          - { name: "(`tls-rustls-no-provider`)", features: --features tls-rustls-no-provider }
-          - { name: "(`tls-openssl`)", features: --features tls-openssl, openssl: true }
-          - { name: "(`--all-features`)", features: --all-features, openssl: true }
+          - {
+              name: "(`tls-rustls-no-provider`)",
+              features: --features tls-rustls-no-provider,
+            }
+          - {
+              name: "(`tls-openssl`)",
+              features: --features tls-openssl,
+              openssl: true,
+            }
+          - {
+              name: "(`--all-features`)",
+              features: --all-features,
+              openssl: true,
+            }
 
     steps:
       - name: Checkout
