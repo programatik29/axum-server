@@ -34,7 +34,7 @@ use crate::{
 };
 use arc_swap::ArcSwap;
 use rustls::ServerConfig;
-use rustls_pemfile::Item;
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::time::Duration;
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
@@ -295,32 +295,17 @@ fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig>
 }
 
 fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
-    let cert = rustls_pemfile::certs(&mut cert.as_ref())
-        .map(|it| it.map(|it| it.to_vec()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let cert: Vec<CertificateDer> = CertificateDer::pem_slice_iter(&cert)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| io_other("failed to parse certificate"))?;
 
-    let mut key_result = Err(io_other("The private key file contained no keys"));
+    let mut key_result: Result<PrivateKeyDer, io::Error> =
+        Err(io_other("The private key file contained no keys"));
 
     // Check the entire PEM file for the key in case it is not first section
-    for item in rustls_pemfile::read_all(&mut key.as_ref()) {
-        let key = item.and_then(|i| match i {
-            Item::Sec1Key(key) => Ok(key.secret_sec1_der().to_vec()),
-            Item::Pkcs1Key(key) => Ok(key.secret_pkcs1_der().to_vec()),
-            Item::Pkcs8Key(key) => Ok(key.secret_pkcs8_der().to_vec()),
-            Item::X509Certificate(_) => {
-                Err(io_other("Unsupported private key format 'X509Certificate'"))
-            }
-            Item::Crl(_) => Err(io_other(
-                "Unsupported private key format 'CertificateRevocationList'",
-            )),
-            Item::Csr(_) => Err(io_other(
-                "Unsupported private key format 'CertificateSigningRequest'",
-            )),
-            Item::SubjectPublicKeyInfo(_) => Err(io_other(
-                "Unsupported private key format 'SubjectPublicKeyInfo'",
-            )),
-            _ => Err(io_other("Unrecognized private key format")),
-        });
+    for item in rustls_pki_types::pem::PemObject::pem_slice_iter(&key) {
+        let key: Result<PrivateKeyDer, io::Error> =
+            item.map_err(|_| io_other("failed to parse PEM"));
 
         match key_result {
             // if we already got a key, then...
@@ -339,7 +324,11 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
         }
     }
 
-    config_from_der(cert, key_result?)
+    let key = key_result?;
+    let cert_der: Vec<Vec<u8>> = cert.into_iter().map(|c| c.to_vec()).collect();
+    let key_der = key.secret_der().to_vec();
+
+    config_from_der(cert_der, key_der)
 }
 
 async fn config_from_pem_file(
@@ -357,20 +346,12 @@ async fn config_from_pem_chain_file(
     chain: impl AsRef<Path>,
 ) -> io::Result<ServerConfig> {
     let cert = fs_err::tokio::read(cert.as_ref()).await?;
-    let cert = rustls_pemfile::certs(&mut cert.as_ref())
-        .map(|it| it.map(|it| CertificateDer::from(it.to_vec())))
-        .collect::<Result<Vec<_>, _>>()?;
+    let cert = CertificateDer::pem_slice_iter(&cert)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| io_other("failed to parse certificate"))?;
     let key = fs_err::tokio::read(chain.as_ref()).await?;
-    let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
-        .ok_or_else(|| io_other("could not parse pem file"))?
-    {
-        Item::Pkcs8Key(key) => Ok(key.into()),
-        Item::Sec1Key(key) => Ok(key.into()),
-        Item::Pkcs1Key(key) => Ok(key.into()),
-        x => Err(io_other(format!(
-            "invalid certificate format, received: {x:?}"
-        ))),
-    }?;
+    let key_cert: PrivateKeyDer =
+        PrivateKeyDer::from_pem_slice(&key).map_err(|_| io_other("could not parse pem file"))?;
 
     ServerConfig::builder()
         .with_no_client_auth()
