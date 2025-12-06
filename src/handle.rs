@@ -1,6 +1,5 @@
-use crate::notify_once::NotifyOnce;
+use crate::{notify_once::NotifyOnce, server::Address};
 use std::{
-    net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -10,14 +9,22 @@ use std::{
 use tokio::{sync::Notify, time::sleep};
 
 /// A handle for [`Server`](crate::server::Server).
-#[derive(Clone, Debug, Default)]
-pub struct Handle {
-    inner: Arc<HandleInner>,
+#[derive(Clone, Debug)]
+pub struct Handle<A: Address> {
+    inner: Arc<HandleInner<A>>,
 }
 
-#[derive(Debug, Default)]
-struct HandleInner {
-    addr: Mutex<Option<SocketAddr>>,
+impl<A: Address> Default for Handle<A> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct HandleInner<A: Address> {
+    addr: Mutex<Option<A>>,
     addr_notify: Notify,
     conn_count: AtomicUsize,
     shutdown: NotifyOnce,
@@ -26,7 +33,22 @@ struct HandleInner {
     conn_end: NotifyOnce,
 }
 
-impl Handle {
+// Manually implemented as the derive macro will want A to be Default.
+impl<A: Address> Default for HandleInner<A> {
+    fn default() -> Self {
+        Self {
+            addr: Default::default(),
+            addr_notify: Default::default(),
+            conn_count: Default::default(),
+            shutdown: Default::default(),
+            graceful: Default::default(),
+            graceful_dur: Default::default(),
+            conn_end: Default::default(),
+        }
+    }
+}
+
+impl<A: Address> Handle<A> {
     /// Create a new handle.
     pub fn new() -> Self {
         Self::default()
@@ -54,25 +76,25 @@ impl Handle {
     /// Returns local address and port when server starts listening.
     ///
     /// Returns `None` if server fails to bind.
-    pub async fn listening(&self) -> Option<SocketAddr> {
+    pub async fn listening(&self) -> Option<A> {
         let notified = self.inner.addr_notify.notified();
 
-        if let Some(addr) = *self.inner.addr.lock().unwrap() {
+        if let Some(addr) = self.inner.addr.lock().unwrap().clone() {
             return Some(addr);
         }
 
         notified.await;
 
-        *self.inner.addr.lock().unwrap()
+        self.inner.addr.lock().unwrap().clone()
     }
 
-    pub(crate) fn notify_listening(&self, addr: Option<SocketAddr>) {
+    pub(crate) fn notify_listening(&self, addr: Option<A>) {
         *self.inner.addr.lock().unwrap() = addr;
 
         self.inner.addr_notify.notify_waiters();
     }
 
-    pub(crate) fn watcher(&self) -> Watcher {
+    pub(crate) fn watcher(&self) -> Watcher<A> {
         Watcher::new(self.clone())
     }
 
@@ -102,12 +124,12 @@ impl Handle {
     }
 }
 
-pub(crate) struct Watcher {
-    handle: Handle,
+pub(crate) struct Watcher<A: Address> {
+    handle: Handle<A>,
 }
 
-impl Watcher {
-    fn new(handle: Handle) -> Self {
+impl<A: Address> Watcher<A> {
+    fn new(handle: Handle<A>) -> Self {
         handle.inner.conn_count.fetch_add(1, Ordering::SeqCst);
 
         Self { handle }
@@ -122,7 +144,7 @@ impl Watcher {
     }
 }
 
-impl Drop for Watcher {
+impl<A: Address> Drop for Watcher<A> {
     fn drop(&mut self) {
         let count = self.handle.inner.conn_count.fetch_sub(1, Ordering::SeqCst) - 1;
 

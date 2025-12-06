@@ -32,7 +32,7 @@ async fn main() {
     println!("server is shut down");
 }
 
-async fn graceful_shutdown(handle: Handle) {
+async fn graceful_shutdown(handle: Handle<SocketAddr>) {
     // Wait 10 seconds.
     sleep(Duration::from_secs(10)).await;
 

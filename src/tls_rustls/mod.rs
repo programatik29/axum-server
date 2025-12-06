@@ -31,6 +31,7 @@ use self::future::RustlsAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     server::{io_other, Server},
+    Address,
 };
 use arc_swap::ArcSwap;
 use rustls::ServerConfig;
@@ -50,7 +51,7 @@ pub(crate) mod export {
 
     /// Create a tls server that will bind to provided address.
     #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-    pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
+    pub fn bind_rustls<A: Address>(addr: A, config: RustlsConfig) -> Server<A, RustlsAcceptor> {
         super::bind_rustls(addr, config)
     }
 
@@ -59,17 +60,29 @@ pub(crate) mod export {
     pub fn from_tcp_rustls(
         listener: std::net::TcpListener,
         config: RustlsConfig,
-    ) -> Server<RustlsAcceptor> {
+    ) -> io::Result<Server<SocketAddr, RustlsAcceptor>> {
         let acceptor = RustlsAcceptor::new(config);
 
-        Server::from_tcp(listener).acceptor(acceptor)
+        Ok(crate::from_tcp(listener)?.acceptor(acceptor))
+    }
+
+    /// Create a tls server from existing `std::os::unix::net::UnixListener`.
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
+    #[cfg(unix)]
+    pub fn from_unix_rustls(
+        listener: std::os::unix::net::UnixListener,
+        config: RustlsConfig,
+    ) -> io::Result<Server<std::os::unix::net::SocketAddr, RustlsAcceptor>> {
+        let acceptor = RustlsAcceptor::new(config);
+
+        Ok(crate::from_unix(listener)?.acceptor(acceptor))
     }
 }
 
 pub mod future;
 
 /// Create a tls server that will bind to provided address.
-pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAcceptor> {
+pub fn bind_rustls<A: Address>(addr: A, config: RustlsConfig) -> Server<A, RustlsAcceptor> {
     let acceptor = RustlsAcceptor::new(config);
 
     Server::bind(addr).acceptor(acceptor)
@@ -79,10 +92,21 @@ pub fn bind_rustls(addr: SocketAddr, config: RustlsConfig) -> Server<RustlsAccep
 pub fn from_tcp_rustls(
     listener: std::net::TcpListener,
     config: RustlsConfig,
-) -> Server<RustlsAcceptor> {
+) -> io::Result<Server<SocketAddr, RustlsAcceptor>> {
     let acceptor = RustlsAcceptor::new(config);
 
-    Server::from_tcp(listener).acceptor(acceptor)
+    Ok(crate::from_tcp(listener)?.acceptor(acceptor))
+}
+
+/// Create a tls server from existing `std::os::unix::net::UnixListener`.
+#[cfg(unix)]
+pub fn from_unix_rustls(
+    listener: std::os::unix::net::UnixListener,
+    config: RustlsConfig,
+) -> io::Result<Server<std::os::unix::net::SocketAddr, RustlsAcceptor>> {
+    let acceptor = RustlsAcceptor::new(config);
+
+    Ok(crate::from_unix(listener)?.acceptor(acceptor))
 }
 
 /// Tls acceptor using rustls.
@@ -464,7 +488,7 @@ mod tests {
         assert_eq!(cert_a, cert_b);
     }
 
-    async fn start_server() -> (Handle, JoinHandle<io::Result<()>>, SocketAddr) {
+    async fn start_server() -> (Handle<SocketAddr>, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
