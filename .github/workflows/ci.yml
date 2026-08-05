@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install `cargo-audit`
         uses: taiki-e/install-action@v2
         with:
@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,7 +70,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: sudo apt-get install pkg-config libssl-dev
@@ -96,7 +96,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install OpenSSL
         run: sudo apt-get install pkg-config libssl-dev
       - name: Install Rust
@@ -138,7 +138,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: sudo apt-get install pkg-config libssl-dev
@@ -176,7 +176,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: sudo apt-get install pkg-config libssl-dev
@@ -217,7 +217,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: |
