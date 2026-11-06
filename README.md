@@ -29,6 +29,8 @@ This project is maintained by community independently from [axum].
   axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
   rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
   ```
+- `tls-rustls-encrypted-keys` - support loading encrypted PKCS#8 private keys
+  with `RustlsConfig`.
 - `tls-openssl` - TLS support through [openssl].
 
 ## Usage Example

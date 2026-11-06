@@ -35,6 +35,8 @@
 //! * `tls-rustls-no-provider` - activate [rustls] support without selecting a
 //!   cryptography provider. Enable a provider through `rustls` (for example
 //!   the `ring` feature) or install one at runtime.
+//! * `tls-rustls-encrypted-keys` - additionally support encrypted PKCS#8
+//!   private keys in [`RustlsConfig`].
 //! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
