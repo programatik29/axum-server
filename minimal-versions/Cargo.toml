@@ -5,7 +5,7 @@ publish = false
 version = "0.0.0"
 
 [features]
-tls-rustls = ["axum-server/tls-rustls"]
+tls-rustls = ["axum-server/tls-rustls", "dep:aws-lc-rs"]
 tls-rustls-no-provider = ["axum-server/tls-rustls-no-provider"]
 tls-openssl = ["axum-server/tls-openssl"]
 
@@ -13,3 +13,6 @@ tls-openssl = ["axum-server/tls-openssl"]
 axum-server = { path = ".." }
 # `tower` v0.5.0 incorrectly only requires `tower-layer` v0.3.0
 tower-layer = "0.3.3"
+# `aws-lc-sys` versions before 0.28 use `cmake_minimum_required(VERSION 3.0)`,
+# which CMake 4 no longer accepts. `aws-lc-rs` 1.13 pulls in 0.28.
+aws-lc-rs = { version = "1.13", optional = true }
