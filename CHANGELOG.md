@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
+- **added**: a `reverse_proxy` example that terminates TLS and forwards requests to an HTTP upstream.
 - **fixed**: `Handle::listening()` now returns `None` after a bind failure instead of waiting forever, and no longer races with server startup.
 - **fixed**: `RustlsConfig::from_pem_chain_file` now sets the `h2` and `http/1.1` ALPN protocols like the other `RustlsConfig` constructors.
 - **fixed**: Connections that are still performing the TLS handshake are now cancelled on shutdown instead of keeping a task and file descriptor alive until the handshake timeout.
