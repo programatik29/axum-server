@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# Unreleased
+
+- **fixed**: `Handle::listening()` now returns `None` after a bind failure instead of waiting forever, and no longer races with server startup.
+- **fixed**: `RustlsConfig::from_pem_chain_file` now sets the `h2` and `http/1.1` ALPN protocols like the other `RustlsConfig` constructors.
+- **fixed**: Connections that are still performing the TLS handshake are now cancelled on shutdown instead of keeping a task and file descriptor alive until the handshake timeout.
+- **fixed**: A timer is now installed by default, so `header_read_timeout` and `keep_alive_timeout` no longer panic with "timeout set, but no timer set".
+- **fixed**: `from_tcp` and `from_unix` now put the provided listener into non-blocking mode, as required by Tokio. The `from_std_listener` examples work without extra setup.
+- **fixed**: `Server::acceptor` and `Server::map` now preserve the HTTP version selected by `http1_only`/`http2_only`.
+- **changed**: The `tls-rustls` feature now enables TLS 1.2, restoring the behavior from before 0.7.0.
+- **changed**: `fs-err` is now an optional dependency and is only pulled in by the rustls features.
+
 # 0.8.0 (7. December 2025)
 
 - **changed**: `Server` is now generic over connections, allowing `axum-server` to listen not just on TCP. 
