@@ -1,6 +1,9 @@
 //! Future types.
 
-use crate::tls_rustls::RustlsConfig;
+use crate::{
+    tls::{TlsInfo, TlsService},
+    tls_rustls::RustlsConfig,
+};
 use pin_project_lite::pin_project;
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
@@ -63,7 +66,7 @@ where
     F: Future<Output = io::Result<(I, S)>>,
     I: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = io::Result<(TlsStream<I>, S)>;
+    type Output = io::Result<(TlsStream<I>, TlsService<S>)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -99,8 +102,9 @@ where
                 AcceptFutureProj::Accept { future, service } => match future.poll(cx) {
                     Poll::Ready(Ok(Ok(stream))) => {
                         let service = service.take().expect("future polled after ready");
+                        let info = tls_info(&stream);
 
-                        return Poll::Ready(Ok((stream, service)));
+                        return Poll::Ready(Ok((stream, TlsService::new(service, info))));
                     }
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
                     Poll::Ready(Err(timeout)) => {
@@ -111,4 +115,17 @@ where
             }
         }
     }
+}
+
+fn tls_info<I>(stream: &TlsStream<I>) -> TlsInfo {
+    let (_, connection) = stream.get_ref();
+
+    TlsInfo::new(
+        connection.server_name().map(str::to_owned),
+        connection.alpn_protocol().map(<[u8]>::to_vec),
+        connection
+            .peer_certificates()
+            .map(|certs| certs.iter().map(|cert| cert.as_ref().to_vec()).collect())
+            .unwrap_or_default(),
+    )
 }

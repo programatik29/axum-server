@@ -113,6 +113,10 @@ pub use self::{
 #[cfg(unix)]
 pub use self::server::from_unix;
 
+#[cfg(any(feature = "tls-rustls-no-provider", feature = "tls-openssl"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "tls-rustls", feature = "tls-openssl"))))]
+pub mod tls;
+
 #[cfg(feature = "tls-rustls-no-provider")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub mod tls_rustls;

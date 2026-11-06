@@ -1,6 +1,7 @@
 //! Future types.
 
 use super::OpenSSLConfig;
+use crate::tls::{TlsInfo, TlsService};
 use pin_project_lite::pin_project;
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
@@ -14,7 +15,7 @@ use std::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{timeout, Timeout};
 
-use openssl::ssl::Ssl;
+use openssl::ssl::{NameType, Ssl};
 use tokio_openssl::SslStream;
 
 pin_project! {
@@ -104,7 +105,7 @@ where
     F: Future<Output = io::Result<(I, S)>>,
     I: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = io::Result<(SslStream<I>, S)>;
+    type Output = io::Result<(SslStream<I>, TlsService<S>)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -155,8 +156,9 @@ where
                 AcceptFutureProj::TlsAccepting { future, service } => match future.poll(cx) {
                     Poll::Ready(Ok(Ok(stream))) => {
                         let service = service.take().expect("future polled after ready");
+                        let info = tls_info(&stream);
 
-                        return Poll::Ready(Ok((stream, service)));
+                        return Poll::Ready(Ok((stream, TlsService::new(service, info))));
                     }
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Err(e)),
                     Poll::Ready(Err(timeout)) => {
@@ -167,4 +169,23 @@ where
             }
         }
     }
+}
+
+fn tls_info<I>(stream: &SslStream<I>) -> TlsInfo {
+    let ssl = stream.ssl();
+
+    let peer_certificates = match ssl.peer_cert_chain() {
+        Some(chain) => chain.iter().filter_map(|cert| cert.to_der().ok()).collect(),
+        None => ssl
+            .peer_certificate()
+            .and_then(|cert| cert.to_der().ok())
+            .into_iter()
+            .collect(),
+    };
+
+    TlsInfo::new(
+        ssl.servername(NameType::HOST_NAME).map(str::to_owned),
+        ssl.selected_alpn_protocol().map(<[u8]>::to_vec),
+        peer_certificates,
+    )
 }

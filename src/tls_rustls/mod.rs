@@ -31,6 +31,7 @@ use self::future::RustlsAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     server::{io_other, Server},
+    tls::TlsService,
     Address,
 };
 use arc_swap::ArcSwap;
@@ -129,7 +130,7 @@ where
     A::Stream: AsyncRead + AsyncWrite + Unpin,
 {
     type Stream = TlsStream<A::Stream>;
-    type Service = A::Service;
+    type Service = TlsService<A::Service>;
     type Future = RustlsAcceptorFuture<A::Future, A::Stream, A::Service>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
@@ -364,11 +365,14 @@ async fn config_from_pem_chain_file(
 
 #[cfg(test)]
 mod tests {
+    use crate::accept::{LocalAddr, LocalAddrAcceptor};
     use crate::handle::Handle;
     use crate::server::Server;
+    use crate::tls::TlsInfo;
     use crate::tls_rustls::{self, RustlsAcceptor, RustlsConfig};
     use axum::body::Body;
     use axum::routing::get;
+    use axum::Extension;
     use axum::Router;
     use bytes::Bytes;
     use http::{response, Request};
@@ -380,7 +384,7 @@ mod tests {
     use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
     use std::fmt::Debug;
     use std::{convert::TryFrom, io, net::SocketAddr, sync::Arc, time::Duration};
-    use tokio::time::sleep;
+    use tokio::time::{sleep, timeout};
     use tokio::{net::TcpStream, task::JoinHandle};
     use tokio_rustls::TlsConnector;
 
@@ -475,6 +479,63 @@ mod tests {
         // until the (30 second) handshake timeout.
         sleep(Duration::from_millis(300)).await;
         assert_eq!(handle.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn tls_info_is_available_to_handlers() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/",
+                get(
+                    |Extension(info): Extension<Arc<TlsInfo>>,
+                     Extension(local): Extension<LocalAddr>| async move {
+                        format!(
+                            "{}|{}|{}|{}",
+                            info.server_name.as_deref().unwrap_or(""),
+                            info.alpn_protocol.is_some(),
+                            info.peer_certificates.len(),
+                            local.0,
+                        )
+                    },
+                ),
+            );
+
+            let acceptor = RustlsAcceptor::new(config).acceptor(LocalAddrAcceptor::new());
+
+            Server::bind(addr)
+                .acceptor(acceptor)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let (mut client, _conn) = connect(addr).await;
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            format!("localhost|true|0|{addr}")
+        );
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
