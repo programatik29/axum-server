@@ -26,7 +26,7 @@ This project is maintained by community independently from [axum].
   cryptography provider. Use this if you want to use `ring` or install a
   process-level provider yourself. For example:
   ```toml
-  axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+  axum-server = { version = "0.9", features = ["tls-rustls-no-provider"] }
   rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
   ```
 - `tls-rustls-encrypted-keys` - support loading encrypted PKCS#8 private keys
