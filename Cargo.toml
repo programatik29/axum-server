@@ -71,14 +71,13 @@ tokio-openssl = { version = "0.6", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 
 [dev-dependencies]
-serial_test = "3.1"
 futures-util = { version = "0.3", default-features = false }
 http-body-util = "0.1"
 axum = "0.8"
 hyper = { version = "1.4", features = ["full"] }
 tokio = { version = ">=1.41", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["add-extension"] }
+tower-http = { version = "0.7", features = ["add-extension"] }
 
 [package.metadata.docs.rs]
 all-features = true
