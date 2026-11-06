@@ -28,10 +28,13 @@
 //! will bind on provided [`SocketAddr`]. [`RustlsConfig`] can be cloned, reload methods can be
 //! used on clone to reload tls configuration.
 //!
-//! # Features
+//! # Cargo features
 //!
-//! * `tls-rustls` - activate [rustls] support.
-//! * `tls-rustls-no-provider` - activate [rustls] support without a default provider.
+//! * `tls-rustls` - activate [rustls] support with the `aws-lc-rs` provider.
+//!   TLS 1.2 and TLS 1.3 are enabled.
+//! * `tls-rustls-no-provider` - activate [rustls] support without selecting a
+//!   cryptography provider. Enable a provider through `rustls` (for example
+//!   the `ring` feature) or install one at runtime.
 //! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
@@ -60,15 +63,15 @@
 //! [axum]: https://crates.io/crates/axum
 //! [bind]: crate::bind
 //! [bind_rustls]: crate::bind_rustls
-//! [created]: https://docs.rs/axum/0.3/axum/struct.Router.html#method.into_make_service
+//! [created]: https://docs.rs/axum/0.8/axum/struct.Router.html#method.into_make_service
 //! [hyper]: https://crates.io/crates/hyper
 //! [openssl]: https://crates.io/crates/openssl
-//! [repository]: https://github.com/programatik29/axum-server/tree/v0.3.0/examples
+//! [repository]: https://github.com/programatik29/axum-server/tree/master/examples
 //! [rustls]: https://crates.io/crates/rustls
 //! [tower]: https://crates.io/crates/tower
-//! [`axum`]: https://docs.rs/axum/0.3
+//! [`axum`]: https://docs.rs/axum/0.8
 //! [`serve`]: crate::server::Server::serve
-//! [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
+//! [`MakeService`]: https://docs.rs/tower/0.5/tower/make/trait.MakeService.html
 //! [`RustlsConfig`]: crate::tls_rustls::RustlsConfig
 //! [`SocketAddr`]: std::net::SocketAddr
 
@@ -117,11 +120,11 @@ pub mod tls_rustls;
 
 #[doc(inline)]
 #[cfg(feature = "tls-rustls-no-provider")]
-pub use self::tls_rustls::export::{bind_rustls, from_tcp_rustls};
+pub use self::tls_rustls::{bind_rustls, from_tcp_rustls};
 
 #[doc(inline)]
 #[cfg(all(feature = "tls-rustls-no-provider", unix))]
-pub use self::tls_rustls::export::from_unix_rustls;
+pub use self::tls_rustls::from_unix_rustls;
 
 #[cfg(feature = "tls-openssl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-openssl")))]
