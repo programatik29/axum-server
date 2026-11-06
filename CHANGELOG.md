@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 # Unreleased
 
+- **added**: `Server::first_request_timeout`, which closes connections that do not send a request in time. This also covers the protocol detection read that hyper does before any HTTP timeout applies.
+- **added**: `Server::accept_error_handler`, which reports connection accept errors instead of silently dropping them.
+- **added**: a `timeouts` example showing the request, header, keep-alive, and TLS handshake timeouts.
 - **added**: a `reverse_proxy` example that terminates TLS and forwards requests to an HTTP upstream.
 - **fixed**: `Handle::listening()` now returns `None` after a bind failure instead of waiting forever, and no longer races with server startup.
 - **fixed**: `RustlsConfig::from_pem_chain_file` now sets the `h2` and `http/1.1` ALPN protocols like the other `RustlsConfig` constructors.
