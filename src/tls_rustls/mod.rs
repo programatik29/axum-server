@@ -35,9 +35,16 @@ use crate::{
     Address,
 };
 use arc_swap::ArcSwap;
+use rustls::server::ResolvesServerCertUsingSni;
+use rustls::sign::CertifiedKey;
 use rustls::ServerConfig;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+
+#[cfg(feature = "tls-rustls-encrypted-keys")]
+use pkcs8::der::{Decode, Document};
+#[cfg(feature = "tls-rustls-encrypted-keys")]
+use rustls_pki_types::PrivatePkcs8KeyDer;
 use std::time::Duration;
 use std::{fmt, io, net::SocketAddr, path::Path, sync::Arc};
 use tokio::{
@@ -199,6 +206,52 @@ impl RustlsConfig {
         Ok(Self { inner })
     }
 
+    /// Create config from PEM formatted files, selecting the certificate by
+    /// the server name sent by the client using SNI.
+    ///
+    /// Each item is `(server_name, certificate_path, private_key_path)`. The
+    /// server name is matched against the client's SNI value, and each
+    /// certificate must be valid for the name it is registered under.
+    ///
+    /// The certificate and private key files must be in PEM format.
+    pub async fn from_sni_pem_files<I, S, P, K>(files: I) -> io::Result<Self>
+    where
+        I: IntoIterator<Item = (S, P, K)>,
+        S: AsRef<str>,
+        P: AsRef<Path>,
+        K: AsRef<Path>,
+    {
+        let provider = crypto_provider();
+
+        let mut resolver = ResolvesServerCertUsingSni::new();
+
+        for (name, cert_path, key_path) in files {
+            let cert = fs_err::tokio::read(cert_path.as_ref()).await?;
+            let key = fs_err::tokio::read(key_path.as_ref()).await?;
+
+            let cert = certificates_from_pem(&cert)?;
+            let key = private_key_from_pem(&key)?;
+            let signing_key = provider
+                .key_provider
+                .load_private_key(key)
+                .map_err(io_other)?;
+
+            resolver
+                .add(name.as_ref(), CertifiedKey::new(cert, signing_key))
+                .map_err(io_other)?;
+        }
+
+        let mut config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(resolver));
+
+        set_alpn(&mut config);
+
+        let inner = Arc::new(ArcSwap::from_pointee(config));
+
+        Ok(Self { inner })
+    }
+
     /// Get  inner `Arc<`[`ServerConfig`]`>`.
     pub fn get_inner(&self) -> Arc<ServerConfig> {
         self.inner.load_full()
@@ -268,6 +321,103 @@ impl RustlsConfig {
     }
 }
 
+#[cfg(feature = "tls-rustls-encrypted-keys")]
+impl RustlsConfig {
+    /// Create config from a PEM formatted certificate and an encrypted PKCS#8
+    /// private key.
+    ///
+    /// The key must be a PKCS#8 `ENCRYPTED PRIVATE KEY` section, as produced by
+    /// `openssl pkcs8 -topk8`.
+    pub async fn from_pem_with_password(
+        cert: Vec<u8>,
+        key: Vec<u8>,
+        password: impl AsRef<[u8]>,
+    ) -> io::Result<Self> {
+        let password = password.as_ref().to_vec();
+        let server_config =
+            spawn_blocking(move || config_from_pem_with_password(cert, key, password))
+                .await
+                .unwrap()?;
+        let inner = Arc::new(ArcSwap::from_pointee(server_config));
+
+        Ok(Self { inner })
+    }
+
+    /// Create config from PEM formatted files, where the private key is an
+    /// encrypted PKCS#8 key.
+    pub async fn from_pem_file_with_password(
+        cert: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+        password: impl AsRef<[u8]>,
+    ) -> io::Result<Self> {
+        let cert = fs_err::tokio::read(cert.as_ref()).await?;
+        let key = fs_err::tokio::read(key.as_ref()).await?;
+
+        Self::from_pem_with_password(cert, key, password).await
+    }
+
+    /// Reload config from a PEM formatted certificate and an encrypted PKCS#8
+    /// private key.
+    pub async fn reload_from_pem_with_password(
+        &self,
+        cert: Vec<u8>,
+        key: Vec<u8>,
+        password: impl AsRef<[u8]>,
+    ) -> io::Result<()> {
+        let password = password.as_ref().to_vec();
+        let server_config =
+            spawn_blocking(move || config_from_pem_with_password(cert, key, password))
+                .await
+                .unwrap()?;
+
+        self.inner.store(Arc::new(server_config));
+
+        Ok(())
+    }
+
+    /// Reload config from PEM formatted files, where the private key is an
+    /// encrypted PKCS#8 key.
+    pub async fn reload_from_pem_file_with_password(
+        &self,
+        cert: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+        password: impl AsRef<[u8]>,
+    ) -> io::Result<()> {
+        let cert = fs_err::tokio::read(cert.as_ref()).await?;
+        let key = fs_err::tokio::read(key.as_ref()).await?;
+
+        self.reload_from_pem_with_password(cert, key, password)
+            .await
+    }
+}
+
+#[cfg(feature = "tls-rustls-encrypted-keys")]
+fn config_from_pem_with_password(
+    cert: Vec<u8>,
+    key: Vec<u8>,
+    password: Vec<u8>,
+) -> io::Result<ServerConfig> {
+    let cert = certificates_from_pem(&cert)?;
+    let pem = std::str::from_utf8(&key)
+        .map_err(|_| io_other("the private key file is not valid UTF-8"))?;
+    let (label, document) = Document::from_pem(pem).map_err(|_| io_other("failed to parse PEM"))?;
+
+    if label != "ENCRYPTED PRIVATE KEY" {
+        return Err(io_other(
+            "expected an encrypted PKCS#8 private key (ENCRYPTED PRIVATE KEY)",
+        ));
+    }
+
+    let encrypted = pkcs8::EncryptedPrivateKeyInfo::from_der(document.as_bytes())
+        .map_err(|_| io_other("failed to parse encrypted private key"))?;
+    let decrypted = encrypted
+        .decrypt(&password)
+        .map_err(|_| io_other("failed to decrypt private key; is the password correct?"))?;
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(decrypted.as_bytes().to_vec()));
+
+    config_from_cert_and_key(cert, key)
+}
+
 impl fmt::Debug for RustlsConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RustlsConfig").finish()
@@ -280,10 +430,30 @@ fn set_alpn(config: &mut ServerConfig) {
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|proto| proto.to_vec()).collect();
 }
 
+fn crypto_provider() -> &'static Arc<rustls::crypto::CryptoProvider> {
+    if let Some(provider) = rustls::crypto::CryptoProvider::get_default() {
+        return provider;
+    }
+
+    // Building a config installs the provider selected by the enabled rustls
+    // crate features if no provider has been installed yet.
+    let _ = ServerConfig::builder();
+
+    rustls::crypto::CryptoProvider::get_default()
+        .expect("a default CryptoProvider is installed by ServerConfig::builder")
+}
+
 fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig> {
     let cert = cert.into_iter().map(CertificateDer::from).collect();
     let key = PrivateKeyDer::try_from(key).map_err(io_other)?;
 
+    config_from_cert_and_key(cert, key)
+}
+
+fn config_from_cert_and_key(
+    cert: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+) -> io::Result<ServerConfig> {
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert, key)
@@ -294,17 +464,19 @@ fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig>
     Ok(config)
 }
 
-fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
-    let cert: Vec<CertificateDer> = CertificateDer::pem_slice_iter(&cert)
+fn certificates_from_pem(cert: &[u8]) -> io::Result<Vec<CertificateDer<'static>>> {
+    CertificateDer::pem_slice_iter(cert)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| io_other("failed to parse certificate"))?;
+        .map_err(|_| io_other("failed to parse certificate"))
+}
 
-    let mut key_result: Result<PrivateKeyDer, io::Error> =
+fn private_key_from_pem(key: &[u8]) -> io::Result<PrivateKeyDer<'static>> {
+    let mut key_result: Result<PrivateKeyDer<'static>, io::Error> =
         Err(io_other("The private key file contained no keys"));
 
     // Check the entire PEM file for the key in case it is not first section
-    for item in rustls_pki_types::pem::PemObject::pem_slice_iter(&key) {
-        let key: Result<PrivateKeyDer, io::Error> =
+    for item in rustls_pki_types::pem::PemObject::pem_slice_iter(key) {
+        let key: Result<PrivateKeyDer<'static>, io::Error> =
             item.map_err(|_| io_other("failed to parse PEM"));
 
         match key_result {
@@ -324,11 +496,14 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
         }
     }
 
-    let key = key_result?;
-    let cert_der: Vec<Vec<u8>> = cert.into_iter().map(|c| c.to_vec()).collect();
-    let key_der = key.secret_der().to_vec();
+    key_result
+}
 
-    config_from_der(cert_der, key_der)
+fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
+    let cert = certificates_from_pem(&cert)?;
+    let key = private_key_from_pem(&key)?;
+
+    config_from_cert_and_key(cert, key)
 }
 
 async fn config_from_pem_file(
@@ -346,21 +521,12 @@ async fn config_from_pem_chain_file(
     chain: impl AsRef<Path>,
 ) -> io::Result<ServerConfig> {
     let cert = fs_err::tokio::read(cert.as_ref()).await?;
-    let cert = CertificateDer::pem_slice_iter(&cert)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| io_other("failed to parse certificate"))?;
+    let cert = certificates_from_pem(&cert)?;
     let key = fs_err::tokio::read(chain.as_ref()).await?;
-    let key_cert: PrivateKeyDer =
+    let key =
         PrivateKeyDer::from_pem_slice(&key).map_err(|_| io_other("could not parse pem file"))?;
 
-    let mut config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert, key_cert)
-        .map_err(|_| io_other("invalid certificate"))?;
-
-    set_alpn(&mut config);
-
-    Ok(config)
+    config_from_cert_and_key(cert, key)
 }
 
 #[cfg(test)]
@@ -428,6 +594,90 @@ mod tests {
             config.get_inner().alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
         );
+    }
+
+    #[tokio::test]
+    async fn sni_pem_files_select_certificate_by_server_name() {
+        let config = RustlsConfig::from_sni_pem_files([
+            (
+                "localhost",
+                "examples/self-signed-certs/sni/localhost-cert.pem",
+                "examples/self-signed-certs/sni/localhost-key.pem",
+            ),
+            (
+                "other.test",
+                "examples/self-signed-certs/sni/other-test-cert.pem",
+                "examples/self-signed-certs/sni/other-test-key.pem",
+            ),
+        ])
+        .await
+        .unwrap();
+
+        let (handle, server_task, addr) = start_server_with_config(config).await;
+
+        let cert_a = get_first_cert_for(addr, "localhost").await;
+        let cert_b = get_first_cert_for(addr, "other.test").await;
+
+        assert_ne!(cert_a, cert_b);
+
+        handle.shutdown();
+        let _ = timeout(Duration::from_secs(1), server_task).await;
+    }
+
+    #[cfg(feature = "tls-rustls-encrypted-keys")]
+    #[tokio::test]
+    async fn encrypted_key_starts_and_serves() {
+        let config = RustlsConfig::from_pem_file_with_password(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/encrypted-key.pem",
+            b"axum-server",
+        )
+        .await
+        .unwrap();
+
+        let (handle, server_task, addr) = start_server_with_config(config).await;
+
+        let (mut client, _conn) = connect(addr).await;
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(body.as_ref(), b"Hello, world!");
+
+        handle.shutdown();
+        let _ = timeout(Duration::from_secs(1), server_task).await;
+    }
+
+    #[cfg(feature = "tls-rustls-encrypted-keys")]
+    #[tokio::test]
+    async fn wrong_password_is_rejected() {
+        let error = RustlsConfig::from_pem_file_with_password(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/encrypted-key.pem",
+            b"wrong-password",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("decrypt"), "{error}");
+    }
+
+    #[cfg(feature = "tls-rustls-encrypted-keys")]
+    #[tokio::test]
+    async fn reload_from_pem_file_with_password_works() {
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        config
+            .reload_from_pem_file_with_password(
+                "examples/self-signed-certs/cert.pem",
+                "examples/self-signed-certs/encrypted-key.pem",
+                b"axum-server",
+            )
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -595,18 +845,24 @@ mod tests {
     }
 
     async fn start_server() -> (Handle<SocketAddr>, JoinHandle<io::Result<()>>, SocketAddr) {
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        start_server_with_config(config).await
+    }
+
+    async fn start_server_with_config(
+        config: RustlsConfig,
+    ) -> (Handle<SocketAddr>, JoinHandle<io::Result<()>>, SocketAddr) {
         let handle = Handle::new();
 
         let server_handle = handle.clone();
         let server_task = tokio::spawn(async move {
             let app = Router::new().route("/", get(|| async { "Hello, world!" }));
-
-            let config = RustlsConfig::from_pem_file(
-                "examples/self-signed-certs/cert.pem",
-                "examples/self-signed-certs/key.pem",
-            )
-            .await?;
-
             let addr = SocketAddr::from(([127, 0, 0, 1], 0));
 
             tls_rustls::bind_rustls(addr, config)
@@ -621,8 +877,15 @@ mod tests {
     }
 
     async fn get_first_cert(addr: SocketAddr) -> CertificateDer<'static> {
+        get_first_cert_for(addr, "localhost").await
+    }
+
+    async fn get_first_cert_for(addr: SocketAddr, name: &'static str) -> CertificateDer<'static> {
         let stream = TcpStream::connect(addr).await.unwrap();
-        let tls_stream = tls_connector().connect(dns_name(), stream).await.unwrap();
+        let tls_stream = tls_connector()
+            .connect(ServerName::try_from(name).unwrap(), stream)
+            .await
+            .unwrap();
 
         let (_io, client_connection) = tls_stream.into_inner();
 

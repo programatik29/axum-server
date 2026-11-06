@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 - **added**: `Server::accept_error_handler`, which reports connection accept errors instead of silently dropping them.
 - **added**: TLS acceptors now add `axum_server::tls::TlsInfo` (SNI, ALPN, and client certificates) to request extensions as `Arc<TlsInfo>` for both rustls and OpenSSL.
 - **added**: `axum_server::accept::LocalAddrAcceptor` adds the local socket address of the connection to request extensions as `LocalAddr`.
+- **added**: `RustlsConfig::from_sni_pem_files`, which selects the certificate using the server name sent by the client through SNI.
+- **added**: the `tls-rustls-encrypted-keys` feature and `RustlsConfig::from_pem_with_password` plus file and reload variants, for encrypted PKCS#8 private keys.
 - **added**: a `timeouts` example showing the request, header, keep-alive, and TLS handshake timeouts.
 - **added**: a `reverse_proxy` example that terminates TLS and forwards requests to an HTTP upstream.
 - **breaking**: TLS acceptors now return a `tls::TlsService` wrapper service. Custom acceptors that wrap a TLS acceptor and assume the service type is unchanged need to be updated; `examples/rustls_session.rs` now uses the built-in `TlsInfo`.
