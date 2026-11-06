@@ -9,8 +9,11 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 - **added**: `Server::first_request_timeout`, which closes connections that do not send a request in time. This also covers the protocol detection read that hyper does before any HTTP timeout applies.
 - **added**: `Server::accept_error_handler`, which reports connection accept errors instead of silently dropping them.
+- **added**: TLS acceptors now add `axum_server::tls::TlsInfo` (SNI, ALPN, and client certificates) to request extensions as `Arc<TlsInfo>` for both rustls and OpenSSL.
+- **added**: `axum_server::accept::LocalAddrAcceptor` adds the local socket address of the connection to request extensions as `LocalAddr`.
 - **added**: a `timeouts` example showing the request, header, keep-alive, and TLS handshake timeouts.
 - **added**: a `reverse_proxy` example that terminates TLS and forwards requests to an HTTP upstream.
+- **breaking**: TLS acceptors now return a `tls::TlsService` wrapper service. Custom acceptors that wrap a TLS acceptor and assume the service type is unchanged need to be updated; `examples/rustls_session.rs` now uses the built-in `TlsInfo`.
 - **fixed**: `Handle::listening()` now returns `None` after a bind failure instead of waiting forever, and no longer races with server startup.
 - **fixed**: `RustlsConfig::from_pem_chain_file` now sets the `h2` and `http/1.1` ALPN protocols like the other `RustlsConfig` constructors.
 - **fixed**: Connections that are still performing the TLS handshake are now cancelled on shutdown instead of keeping a task and file descriptor alive until the handshake timeout.

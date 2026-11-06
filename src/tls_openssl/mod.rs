@@ -30,6 +30,7 @@ use self::future::OpenSSLAcceptorFuture;
 use crate::{
     accept::{Accept, DefaultAcceptor},
     server::Server,
+    tls::TlsService,
     Address,
 };
 use arc_swap::ArcSwap;
@@ -109,7 +110,7 @@ where
     A::Stream: AsyncRead + AsyncWrite + Unpin,
 {
     type Stream = SslStream<A::Stream>;
-    type Service = A::Service;
+    type Service = TlsService<A::Service>;
     type Future = OpenSSLAcceptorFuture<A::Future, A::Stream, A::Service>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
@@ -334,17 +335,20 @@ fn config_from_pem_chain_file(
 mod tests {
     use crate::{
         handle::Handle,
+        server::Server,
+        tls::TlsInfo,
         tls_openssl::{self, OpenSSLConfig},
     };
     use axum::body::Body;
     use axum::routing::get;
+    use axum::Extension;
     use axum::Router;
     use bytes::Bytes;
     use http::{response, Request};
     use http_body_util::BodyExt;
     use hyper::client::conn::http1::{handshake, SendRequest};
     use hyper_util::rt::TokioIo;
-    use std::{io, net::SocketAddr};
+    use std::{io, net::SocketAddr, sync::Arc, time::Duration};
     use tokio::{net::TcpStream, task::JoinHandle};
 
     use openssl::{
@@ -363,6 +367,56 @@ mod tests {
         let (_parts, body) = send_empty_request(&mut client).await;
 
         assert_eq!(body.as_ref(), b"Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn tls_info_is_available_to_handlers() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+
+        let config = OpenSSLConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .unwrap();
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/",
+                get(|Extension(info): Extension<Arc<TlsInfo>>| async move {
+                    format!(
+                        "{}|{}|{}",
+                        info.server_name.as_deref().unwrap_or(""),
+                        info.alpn_protocol.is_some(),
+                        info.peer_certificates.len(),
+                    )
+                }),
+            );
+
+            Server::bind(addr)
+                .acceptor(tls_openssl::OpenSSLAcceptor::new(config))
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let (mut client, _conn) = connect(addr).await;
+        let (_parts, body) = send_empty_request(&mut client).await;
+
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            "localhost|true|0"
+        );
+
+        handle.shutdown();
+        let result = tokio::time::timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -478,15 +532,11 @@ mod tests {
     async fn tls_connector(hostname: &str, stream: TcpStream) -> SslStream<TcpStream> {
         let mut tls_parms = SslConnector::builder(SslMethod::tls_client()).unwrap();
         tls_parms.set_verify(SslVerifyMode::NONE);
-        let hostname_owned = hostname.to_string();
-        tls_parms.set_client_hello_callback(move |ssl_ref, _ssl_alert| {
-            ssl_ref
-                .set_hostname(hostname_owned.as_str())
-                .map(|()| openssl::ssl::ClientHelloResponse::SUCCESS)
-        });
+        tls_parms.set_alpn_protos(b"\x08http/1.1\x02h2").unwrap();
         let tls_parms = tls_parms.build();
 
-        let ssl = Ssl::new(tls_parms.context()).unwrap();
+        let mut ssl = Ssl::new(tls_parms.context()).unwrap();
+        ssl.set_hostname(hostname).unwrap();
         let mut tls_stream = SslStream::new(ssl, stream).unwrap();
 
         SslStream::connect(Pin::new(&mut tls_stream)).await.unwrap();

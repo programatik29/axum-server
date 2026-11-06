@@ -572,11 +572,15 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use crate::{accept::Accept, handle::Handle, server::Server};
+    use crate::{
+        accept::{Accept, LocalAddr, LocalAddrAcceptor},
+        handle::Handle,
+        server::Server,
+    };
     use axum::body::Body;
     use axum::response::Response;
     use axum::routing::post;
-    use axum::{routing::get, Router};
+    use axum::{routing::get, Extension, Router};
     use bytes::Bytes;
     use futures_util::{stream, StreamExt};
     use http::{Method, Request, Uri};
@@ -989,6 +993,52 @@ mod tests {
             assert_eq!(errors[0].1, "acceptor failed");
             assert!(errors[0].0.is_some(), "remote address was not reported");
         }
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_addr_acceptor_adds_extension() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .acceptor(LocalAddrAcceptor::new())
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route(
+                            "/",
+                            get(|Extension(local): Extension<LocalAddr>| async move {
+                                local.0.to_string()
+                            }),
+                        )
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let (mut client, _conn) = connect(addr).await;
+
+        let body = client
+            .send_request(Request::new(Body::empty()))
+            .await
+            .unwrap()
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+
+        assert_eq!(body.as_ref(), addr.to_string().as_bytes());
 
         handle.shutdown();
         let result = timeout(Duration::from_secs(1), server_task)
