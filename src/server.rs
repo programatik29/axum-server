@@ -16,12 +16,16 @@ use std::{
     future::poll_fn,
     io::{self, ErrorKind},
     net::SocketAddr as IpSocketAddr,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
+    sync::oneshot,
 };
+use tower_service::Service;
 
 #[cfg(unix)]
 use {
@@ -36,7 +40,11 @@ pub struct Server<Addr: Address, A = DefaultAcceptor> {
     listener: Listener<Addr>,
     handle: Handle<Addr>,
     http_version: Option<HttpVersion>,
+    first_request_timeout: Option<Duration>,
+    accept_error_handler: Option<AcceptErrorHandler<Addr>>,
 }
+
+type AcceptErrorHandler<A> = Arc<dyn Fn(Option<&A>, &io::Error) + Send + Sync>;
 
 // Builder doesn't implement Debug or Clone right now
 impl<A: Address, B> fmt::Debug for Server<A, B>
@@ -189,6 +197,8 @@ impl<A: Address> Server<A> {
             listener: Listener::Bind(addr),
             handle,
             http_version: None,
+            first_request_timeout: None,
+            accept_error_handler: None,
         }
     }
 
@@ -204,6 +214,8 @@ impl<A: Address> Server<A> {
             listener: Listener::Ready(listener),
             handle,
             http_version: None,
+            first_request_timeout: None,
+            accept_error_handler: None,
         }
     }
 }
@@ -223,6 +235,8 @@ impl<A: Address, Acc> Server<A, Acc> {
             listener: self.listener,
             handle: self.handle,
             http_version: self.http_version,
+            first_request_timeout: self.first_request_timeout,
+            accept_error_handler: self.accept_error_handler,
         }
     }
 
@@ -237,6 +251,8 @@ impl<A: Address, Acc> Server<A, Acc> {
             listener: self.listener,
             handle: self.handle,
             http_version: self.http_version,
+            first_request_timeout: self.first_request_timeout,
+            accept_error_handler: self.accept_error_handler,
         }
     }
 
@@ -279,6 +295,40 @@ impl<A: Address, Acc> Server<A, Acc> {
         self
     }
 
+    /// Set a timeout for the first request on a connection.
+    ///
+    /// If the client does not send a complete first request within this
+    /// duration, the connection is closed. This bounds the time a newly
+    /// accepted connection can occupy resources before the HTTP protocol is
+    /// determined, which is otherwise not covered by
+    /// [`http_builder`](Self::http_builder) timeouts.
+    ///
+    /// The timeout starts after the connection acceptor finishes. For a TLS
+    /// server this means the TLS handshake is bounded by the acceptor's own
+    /// handshake timeout instead.
+    ///
+    /// `None` disables the timeout. The default is `None`.
+    pub fn first_request_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.first_request_timeout = timeout.into();
+        self
+    }
+
+    /// Set a handler called when accepting a connection fails.
+    ///
+    /// The handler receives the remote address when it is known and the error
+    /// that occurred. Accept errors do not stop the server; it backs off and
+    /// keeps accepting.
+    ///
+    /// The handler is called from the accept loop, so keep it cheap. Use it for
+    /// logging or metrics rather than blocking work.
+    pub fn accept_error_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(Option<&A>, &io::Error) + Send + Sync + 'static,
+    {
+        self.accept_error_handler = Some(Arc::new(handler));
+        self
+    }
+
     /// Serve provided [`MakeService`].
     ///
     /// To create [`MakeService`] easily, `Shared` from [`tower`] can be used.
@@ -307,6 +357,8 @@ impl<A: Address, Acc> Server<A, Acc> {
         let acceptor = self.acceptor;
         let handle = self.handle;
         let builder = std::sync::Arc::new(self.builder);
+        let first_request_timeout = self.first_request_timeout;
+        let accept_error_handler = self.accept_error_handler;
 
         let mut incoming = match bind_incoming(self.listener).await {
             Ok(v) => v,
@@ -322,7 +374,7 @@ impl<A: Address, Acc> Server<A, Acc> {
             loop {
                 let (tcp_stream, socket_addr) = tokio::select! {
                     biased;
-                    result = accept(&mut incoming) => result,
+                    result = accept(&mut incoming, accept_error_handler.as_ref()) => result,
                     _ = handle.wait_graceful_shutdown() => return Ok(()),
                 };
 
@@ -330,15 +382,22 @@ impl<A: Address, Acc> Server<A, Acc> {
                     .await
                     .map_err(io_other)?;
 
+                let remote_addr = socket_addr.clone();
                 let service = match make_service.make_service(socket_addr).await {
                     Ok(service) => service,
-                    Err(_) => continue,
+                    Err(e) => {
+                        if let Some(handler) = &accept_error_handler {
+                            handler(Some(&remote_addr), &io_other(e));
+                        }
+                        continue;
+                    }
                 };
 
                 let acceptor = acceptor.clone();
                 let watcher = handle.watcher();
                 let builder = builder.clone();
                 let http_version = self.http_version;
+                let accept_error_handler = accept_error_handler.clone();
 
                 tokio::spawn(async move {
                     // Do not let a connection that is still in the TLS handshake
@@ -350,32 +409,70 @@ impl<A: Address, Acc> Server<A, Acc> {
                         accepted = acceptor.accept(tcp_stream, service) => accepted,
                     };
 
-                    if let Ok((stream, send_service)) = accepted {
-                        let io = TokioIo::new(stream);
-                        let service = send_service.into_service();
-                        let service = TowerToHyperService::new(service);
-                        let serve_future = match http_version {
-                            Some(_) => Either::Left(builder.serve_connection(io, service)),
-                            _ => Either::Right(builder.serve_connection_with_upgrades(io, service)),
-                        };
-                        tokio::pin!(serve_future);
-                        let mut serve_future = serve_future.as_pin_mut();
+                    let (stream, send_service) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(e) => {
+                            if let Some(handler) = &accept_error_handler {
+                                handler(Some(&remote_addr), &e);
+                            }
+                            return;
+                        }
+                    };
+
+                    let io = TokioIo::new(stream);
+                    let service = send_service.into_service();
+
+                    let (first_request_rx, notify_first_request) = match first_request_timeout {
+                        Some(_) => {
+                            let (tx, rx) = oneshot::channel();
+                            (Some(rx), Some(Arc::new(Mutex::new(Some(tx)))))
+                        }
+                        None => (None, None),
+                    };
+
+                    let service = FirstRequestService::new(service, notify_first_request);
+                    let service = TowerToHyperService::new(service);
+                    let serve_future = match http_version {
+                        Some(_) => Either::Left(builder.serve_connection(io, service)),
+                        _ => Either::Right(builder.serve_connection_with_upgrades(io, service)),
+                    };
+                    tokio::pin!(serve_future);
+                    let mut serve_future = serve_future.as_pin_mut();
+
+                    // Bound the time before the first request is dispatched. This
+                    // also covers hyper's un-timed protocol detection.
+                    if let (Some(timeout), Some(mut first_request_rx)) =
+                        (first_request_timeout, first_request_rx)
+                    {
                         tokio::select! {
                             biased;
-                            _ = watcher.wait_graceful_shutdown() => {
-                                match &mut serve_future {
-                                    Either::Left(serve_future) => serve_future.as_mut().graceful_shutdown(),
-                                    Either::Right(serve_future) => serve_future.as_mut().graceful_shutdown(),
-                                }
-                                tokio::select! {
-                                    biased;
-                                    _ = watcher.wait_shutdown() => (),
-                                    _ = &mut serve_future => (),
+                            _ = watcher.wait_shutdown() => return,
+                            _ = watcher.wait_graceful_shutdown() => {}
+                            _ = tokio::time::sleep(timeout) => return,
+                            result = &mut first_request_rx => {
+                                if result.is_err() {
+                                    return;
                                 }
                             }
-                            _ = watcher.wait_shutdown() => (),
-                            _ = &mut serve_future => (),
+                            _ = &mut serve_future => return,
                         }
+                    }
+
+                    tokio::select! {
+                        biased;
+                        _ = watcher.wait_graceful_shutdown() => {
+                            match &mut serve_future {
+                                Either::Left(serve_future) => serve_future.as_mut().graceful_shutdown(),
+                                Either::Right(serve_future) => serve_future.as_mut().graceful_shutdown(),
+                            }
+                            tokio::select! {
+                                biased;
+                                _ = watcher.wait_shutdown() => (),
+                                _ = &mut serve_future => (),
+                            }
+                        }
+                        _ = watcher.wait_shutdown() => (),
+                        _ = &mut serve_future => (),
                     }
                 });
             }
@@ -411,12 +508,59 @@ async fn bind_incoming<A: Address>(listener: Listener<A>) -> io::Result<A::Liste
     }
 }
 
-pub(crate) async fn accept<L: AddrListener<S, A>, S, A: Address>(listener: &mut L) -> (S, A) {
+pub(crate) async fn accept<L: AddrListener<S, A>, S, A: Address>(
+    listener: &mut L,
+    error_handler: Option<&AcceptErrorHandler<A>>,
+) -> (S, A) {
     loop {
         match listener.accept_stream().await {
             Ok(value) => return value,
-            Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            Err(e) => {
+                if let Some(handler) = error_handler {
+                    handler(None, &e);
+                }
+
+                // Avoid a hot loop when the listener is failing continuously,
+                // for example because of `EMFILE`.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
+    }
+}
+
+/// A service wrapper that reports when the first request is dispatched.
+#[derive(Clone)]
+struct FirstRequestService<S> {
+    inner: S,
+    notify: Option<Arc<Mutex<Option<oneshot::Sender<()>>>>>,
+}
+
+impl<S> FirstRequestService<S> {
+    fn new(inner: S, notify: Option<Arc<Mutex<Option<oneshot::Sender<()>>>>>) -> Self {
+        Self { inner, notify }
+    }
+}
+
+impl<S> Service<Request<Incoming>> for FirstRequestService<S>
+where
+    S: Service<Request<Incoming>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Incoming>) -> Self::Future {
+        if let Some(notify) = &self.notify {
+            if let Some(tx) = notify.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+
+        self.inner.call(req)
     }
 }
 
@@ -428,7 +572,7 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use crate::{handle::Handle, server::Server};
+    use crate::{accept::Accept, handle::Handle, server::Server};
     use axum::body::Body;
     use axum::response::Response;
     use axum::routing::post;
@@ -697,6 +841,153 @@ mod tests {
             Ok(0) => {}
             Ok(n) => panic!("expected the connection to be closed, read {n} bytes"),
             Err(_) => {}
+        }
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn first_request_timeout_closes_idle_connection() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .first_request_timeout(Duration::from_millis(100))
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+
+        let mut buf = [0u8; 1];
+        let read = timeout(Duration::from_secs(1), stream.read(&mut buf))
+            .await
+            .expect("idle connection was not closed by the first request timeout");
+
+        match read {
+            Ok(0) => {}
+            Ok(n) => panic!("expected the connection to be closed, read {n} bytes"),
+            Err(_) => {}
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(handle.connection_count(), 0);
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn first_request_timeout_keeps_established_connection() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .first_request_timeout(Duration::from_millis(100))
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let (mut client, _conn) = connect(addr).await;
+
+        do_empty_request_h1(&mut client).await.unwrap();
+
+        // The connection has already served a request, so the first request
+        // timeout no longer applies.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        do_empty_request_h1(&mut client).await.unwrap();
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn accept_error_handler_is_called() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct FailingAcceptor;
+
+        impl<S> Accept<TcpStream, S> for FailingAcceptor {
+            type Stream = TcpStream;
+            type Service = S;
+            type Future = std::future::Ready<io::Result<(TcpStream, S)>>;
+
+            fn accept(&self, _stream: TcpStream, _service: S) -> Self::Future {
+                std::future::ready(Err(io::Error::other("acceptor failed")))
+            }
+        }
+
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let handler_errors = errors.clone();
+
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .acceptor(FailingAcceptor)
+                .accept_error_handler(move |addr, error| {
+                    handler_errors
+                        .lock()
+                        .unwrap()
+                        .push((addr.cloned(), error.to_string()));
+                })
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+        let _stream = TcpStream::connect(addr).await.unwrap();
+
+        for _ in 0..100 {
+            if !errors.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        {
+            let errors = errors.lock().unwrap();
+            assert_eq!(errors.len(), 1, "error handler was not called: {errors:?}");
+            assert_eq!(errors[0].1, "acceptor failed");
+            assert!(errors[0].0.is_some(), "remote address was not reported");
         }
 
         handle.shutdown();
