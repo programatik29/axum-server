@@ -81,7 +81,6 @@
     clippy::cargo_common_metadata,
     clippy::dbg_macro,
     clippy::doc_markdown,
-    clippy::empty_enum,
     clippy::enum_glob_use,
     clippy::inefficient_to_string,
     clippy::mem_forget,
