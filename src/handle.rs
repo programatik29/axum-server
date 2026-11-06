@@ -6,7 +6,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{sync::Notify, time::sleep};
+use tokio::time::sleep;
 
 /// A handle for [`Server`](crate::server::Server).
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ impl<A: Address> Default for Handle<A> {
 #[derive(Debug)]
 struct HandleInner<A: Address> {
     addr: Mutex<Option<A>>,
-    addr_notify: Notify,
+    addr_notify: NotifyOnce,
     conn_count: AtomicUsize,
     shutdown: NotifyOnce,
     graceful: NotifyOnce,
@@ -77,13 +77,11 @@ impl<A: Address> Handle<A> {
     ///
     /// Returns `None` if server fails to bind.
     pub async fn listening(&self) -> Option<A> {
-        let notified = self.inner.addr_notify.notified();
-
-        if let Some(addr) = self.inner.addr.lock().unwrap().clone() {
-            return Some(addr);
-        }
-
-        notified.await;
+        // Wait for the server to resolve its listening address. This is a
+        // one-shot latch: if binding already failed, this returns immediately
+        // with `None` instead of waiting forever for a notification that will
+        // never come.
+        self.inner.addr_notify.notified().await;
 
         self.inner.addr.lock().unwrap().clone()
     }
@@ -151,5 +149,39 @@ impl<A: Address> Drop for Watcher<A> {
         if count == 0 && self.handle.inner.graceful.is_notified() {
             self.handle.inner.conn_end.notify_waiters();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Handle;
+    use std::{net::SocketAddr, time::Duration};
+
+    #[tokio::test]
+    async fn listening_returns_none_after_bind_failure() {
+        let handle = Handle::<SocketAddr>::new();
+
+        // This is what `Server::serve` calls when binding fails.
+        handle.notify_listening(None);
+
+        let addr = tokio::time::timeout(Duration::from_secs(1), handle.listening())
+            .await
+            .expect("listening() should resolve immediately after a bind failure");
+
+        assert_eq!(addr, None);
+    }
+
+    #[tokio::test]
+    async fn listening_returns_addr_after_successful_bind() {
+        let handle = Handle::<SocketAddr>::new();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+
+        handle.notify_listening(Some(addr));
+
+        let resolved = tokio::time::timeout(Duration::from_secs(1), handle.listening())
+            .await
+            .expect("listening() should resolve immediately");
+
+        assert_eq!(resolved, Some(addr));
     }
 }

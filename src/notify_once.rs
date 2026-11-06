@@ -19,10 +19,14 @@ impl NotifyOnce {
     }
 
     pub(crate) async fn notified(&self) {
-        let future = self.notify.notified();
+        // `Notify::notified` does not register a waiter until it is polled for
+        // the first time. Enable it up front so a notification that arrives
+        // between the flag check and the first poll is not lost.
+        let mut notified = std::pin::pin!(self.notify.notified());
+        notified.as_mut().enable();
 
         if !self.notified.load(Ordering::SeqCst) {
-            future.await;
+            notified.await;
         }
     }
 }
