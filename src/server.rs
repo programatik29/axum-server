@@ -7,7 +7,7 @@ use either::Either;
 use http::Request;
 use hyper::body::Incoming;
 use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
+    rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder,
     service::TowerToHyperService,
 };
@@ -66,13 +66,25 @@ pub fn bind<A: Address>(addr: A) -> Server<A> {
 }
 
 /// Create a [`Server`] from existing `std::net::TcpListener`.
+///
+/// The listener is put into non-blocking mode.
 pub fn from_tcp(listener: std::net::TcpListener) -> io::Result<Server<IpSocketAddr>> {
+    // `tokio::net::TcpListener::from_std` requires the listener to be in
+    // non-blocking mode; callers of this function should not have to know that.
+    listener.set_nonblocking(true)?;
+
     Ok(Server::from_listener(TcpListener::from_std(listener)?))
 }
 
 /// Create a [`Server`] from existing `std::os::unix::net::UnixListener`.
+///
+/// The listener is put into non-blocking mode.
 #[cfg(unix)]
 pub fn from_unix(listener: std::os::unix::net::UnixListener) -> io::Result<Server<UnixSocketAddr>> {
+    // `tokio::net::UnixListener::from_std` requires the listener to be in
+    // non-blocking mode; callers of this function should not have to know that.
+    listener.set_nonblocking(true)?;
+
     Ok(Server::from_listener(UnixListener::from_std(listener)?))
 }
 
@@ -145,11 +157,30 @@ impl Address for IpSocketAddr {
     type Listener = TcpListener;
 }
 
+/// Create the HTTP protocol builder used by [`Server`].
+///
+/// A timer is installed by default so that `header_read_timeout` and
+/// `keep_alive_timeout` work without extra setup.
+fn default_builder() -> Builder<TokioExecutor> {
+    let mut builder = Builder::new(TokioExecutor::new());
+
+    // Hyper defaults to a 30 second header read timeout. Without a timer that
+    // default was silently ignored, so keep it disabled to preserve the
+    // previous behavior; callers can still opt in through `http_builder`.
+    builder
+        .http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(None);
+    builder.http2().timer(TokioTimer::new());
+
+    builder
+}
+
 impl<A: Address> Server<A> {
     /// Create a server that will bind to provided address.
     pub fn bind(addr: A) -> Self {
         let acceptor = DefaultAcceptor::new();
-        let builder = Builder::new(TokioExecutor::new());
+        let builder = default_builder();
         let handle = Handle::new();
 
         Self {
@@ -164,7 +195,7 @@ impl<A: Address> Server<A> {
     /// Create a server from an existing `AddrListener`.
     pub fn from_listener(listener: A::Listener) -> Self {
         let acceptor = DefaultAcceptor::new();
-        let builder = Builder::new(TokioExecutor::new());
+        let builder = default_builder();
         let handle = Handle::new();
 
         Self {
@@ -191,7 +222,7 @@ impl<A: Address, Acc> Server<A, Acc> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
-            http_version: None,
+            http_version: self.http_version,
         }
     }
 
@@ -205,7 +236,7 @@ impl<A: Address, Acc> Server<A, Acc> {
             builder: self.builder,
             listener: self.listener,
             handle: self.handle,
-            http_version: None,
+            http_version: self.http_version,
         }
     }
 
@@ -224,14 +255,18 @@ impl<A: Address, Acc> Server<A, Acc> {
         &mut self.builder
     }
 
-    /// Only accepts HTTP/1
+    /// Only accepts HTTP/1.
+    ///
+    /// Note that HTTP/1 protocol upgrades (for example `WebSockets`) are not
+    /// supported when this is used; the default protocol-detecting mode does
+    /// support them.
     pub fn http1_only(mut self) -> Self {
         self.http_version = Some(HttpVersion::Http1);
         self.builder = self.builder.http1_only();
         self
     }
 
-    /// Only accepts HTTP/2
+    /// Only accepts HTTP/2.
     pub fn http2_only(mut self) -> Self {
         self.http_version = Some(HttpVersion::Http2);
         self.builder = self.builder.http2_only();
@@ -256,9 +291,9 @@ impl<A: Address, Acc> Server<A, Acc> {
     /// - `make_service` returns an error when `poll_ready` is called. This never happens on
     ///   [`axum`] make services.
     ///
-    /// [`axum`]: https://docs.rs/axum/0.3
+    /// [`axum`]: https://docs.rs/axum/0.8
     /// [`tower`]: https://docs.rs/tower
-    /// [`MakeService`]: https://docs.rs/tower/0.4/tower/make/trait.MakeService.html
+    /// [`MakeService`]: https://docs.rs/tower/0.5/tower/make/trait.MakeService.html
     pub async fn serve<M>(self, mut make_service: M) -> io::Result<()>
     where
         M: MakeService<A, Request<Incoming>>,
@@ -306,7 +341,16 @@ impl<A: Address, Acc> Server<A, Acc> {
                 let http_version = self.http_version;
 
                 tokio::spawn(async move {
-                    if let Ok((stream, send_service)) = acceptor.accept(tcp_stream, service).await {
+                    // Do not let a connection that is still in the TLS handshake
+                    // keep a task (and its file descriptor) alive after shutdown.
+                    let accepted = tokio::select! {
+                        biased;
+                        _ = watcher.wait_shutdown() => return,
+                        _ = watcher.wait_graceful_shutdown() => return,
+                        accepted = acceptor.accept(tcp_stream, service) => accepted,
+                    };
+
+                    if let Ok((stream, send_service)) = accepted {
                         let io = TokioIo::new(stream);
                         let service = send_service.into_service();
                         let service = TowerToHyperService::new(service);
@@ -384,10 +428,7 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        handle::Handle,
-        server::{HttpVersion, Server},
-    };
+    use crate::{handle::Handle, server::Server};
     use axum::body::Body;
     use axum::response::Response;
     use axum::routing::post;
@@ -401,8 +442,15 @@ mod tests {
     use hyper::client::conn::{http1, http2};
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use std::{io, net::SocketAddr as IpSocketAddr, time::Duration};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
+
+    #[derive(Clone, Copy)]
+    enum TestHttpVersion {
+        Http1,
+        Http2,
+    }
 
     #[tokio::test]
     async fn start_and_request() {
@@ -550,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn test_http1_only() {
         let (_handle, _server_task, addr) =
-            start_server_with_http_version(Some(HttpVersion::Http1)).await;
+            start_server_with_http_version(Some(TestHttpVersion::Http1)).await;
 
         let (mut client, _conn) = connect_h1(addr).await;
 
@@ -567,7 +615,7 @@ mod tests {
     #[tokio::test]
     async fn test_http2_only() {
         let (_handle, _server_task, addr) =
-            start_server_with_http_version(Some(HttpVersion::Http2)).await;
+            start_server_with_http_version(Some(TestHttpVersion::Http2)).await;
 
         let (mut client, _conn) = connect_h2(addr).await;
 
@@ -581,8 +629,86 @@ mod tests {
         do_empty_request_h1(&mut client).await.unwrap_err();
     }
 
+    #[tokio::test]
+    async fn test_listening_returns_none_on_bind_failure() {
+        // Keep the port occupied so that the server fails to bind.
+        let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = occupied.local_addr().unwrap();
+
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(Router::new().into_make_service())
+                .await
+        });
+
+        let result = server_task.await.unwrap();
+        assert!(result.is_err(), "expected bind failure");
+
+        let listening = timeout(Duration::from_secs(1), handle.listening())
+            .await
+            .expect("listening() hung after bind failure instead of returning None");
+
+        assert_eq!(listening, None);
+    }
+
+    #[tokio::test]
+    async fn test_header_read_timeout_with_default_timer() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+        let mut server = Server::bind(addr);
+        server
+            .http_builder()
+            .http1()
+            .header_read_timeout(Duration::from_millis(100));
+
+        let server_task = tokio::spawn(async move {
+            server
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        // A normal request still works and does not panic because a timer is installed.
+        let (mut client, _conn) = connect(addr).await;
+        do_empty_request_h1(&mut client).await.unwrap();
+
+        // A client that stalls after the request line is disconnected.
+        let mut stalled = TcpStream::connect(addr).await.unwrap();
+        stalled.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+
+        let mut buf = [0u8; 32];
+        let read = timeout(Duration::from_secs(1), stalled.read(&mut buf))
+            .await
+            .expect("stalled connection was not closed by the header read timeout");
+
+        match read {
+            Ok(0) => {}
+            Ok(n) => panic!("expected the connection to be closed, read {n} bytes"),
+            Err(_) => {}
+        }
+
+        handle.shutdown();
+        let result = timeout(Duration::from_secs(1), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
     async fn start_server_with_http_version(
-        http_version: Option<HttpVersion>,
+        http_version: Option<TestHttpVersion>,
     ) -> (
         Handle<IpSocketAddr>,
         JoinHandle<io::Result<()>>,
@@ -605,8 +731,8 @@ mod tests {
             let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
             let server = Server::bind(addr);
             let server = match http_version {
-                Some(HttpVersion::Http1) => server.http1_only(),
-                Some(HttpVersion::Http2) => server.http2_only(),
+                Some(TestHttpVersion::Http1) => server.http1_only(),
+                Some(TestHttpVersion::Http2) => server.http2_only(),
                 None => server,
             };
 

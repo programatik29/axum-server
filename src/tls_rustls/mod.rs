@@ -427,6 +427,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_is_cancelled_on_shutdown() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        // Make sure the test fails (via the timeout) rather than hanging if the
+        // handshake is not cancelled.
+        let acceptor = RustlsAcceptor::new(config).handshake_timeout(Duration::from_secs(30));
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .acceptor(acceptor)
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        // Open a connection but never start the TLS handshake.
+        let _stream = TcpStream::connect(addr).await.unwrap();
+
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(handle.connection_count(), 1);
+
+        handle.shutdown();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("server did not shut down")
+            .unwrap();
+        assert!(result.is_ok());
+
+        // The pending handshake task must be cancelled instead of running
+        // until the (30 second) handshake timeout.
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(handle.connection_count(), 0);
+    }
+
+    #[tokio::test]
     async fn test_reload() {
         let handle = Handle::new();
 
