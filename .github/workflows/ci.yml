@@ -142,12 +142,20 @@ jobs:
       - name: Install OpenSSL
         if: matrix.features.openssl == true
         run: sudo apt-get install pkg-config libssl-dev
+      - name: Install Stable Rust
+        if: matrix.rust.msrv == true
+        uses: dtolnay/rust-toolchain@stable
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust.version }}
+      - name: Resolve MSRV-compatible dependencies
+        if: matrix.rust.msrv == true
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: cargo +stable generate-lockfile
       - name: Run Cargo Build
-        run: cargo build ${{ matrix.features.features }}
+        run: cargo build ${{ matrix.rust.msrv && '--locked' || '' }} ${{ matrix.features.features }}
 
   test:
     name: Test ${{ matrix.features.name }}

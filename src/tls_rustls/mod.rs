@@ -45,43 +45,10 @@ use tokio::{
 };
 use tokio_rustls::server::TlsStream;
 
-pub(crate) mod export {
-    #[allow(clippy::wildcard_imports)]
-    use super::*;
-
-    /// Create a tls server that will bind to provided address.
-    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-    pub fn bind_rustls<A: Address>(addr: A, config: RustlsConfig) -> Server<A, RustlsAcceptor> {
-        super::bind_rustls(addr, config)
-    }
-
-    /// Create a tls server from existing `std::net::TcpListener`.
-    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-    pub fn from_tcp_rustls(
-        listener: std::net::TcpListener,
-        config: RustlsConfig,
-    ) -> io::Result<Server<SocketAddr, RustlsAcceptor>> {
-        let acceptor = RustlsAcceptor::new(config);
-
-        Ok(crate::from_tcp(listener)?.acceptor(acceptor))
-    }
-
-    /// Create a tls server from existing `std::os::unix::net::UnixListener`.
-    #[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
-    #[cfg(unix)]
-    pub fn from_unix_rustls(
-        listener: std::os::unix::net::UnixListener,
-        config: RustlsConfig,
-    ) -> io::Result<Server<std::os::unix::net::SocketAddr, RustlsAcceptor>> {
-        let acceptor = RustlsAcceptor::new(config);
-
-        Ok(crate::from_unix(listener)?.acceptor(acceptor))
-    }
-}
-
 pub mod future;
 
 /// Create a tls server that will bind to provided address.
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub fn bind_rustls<A: Address>(addr: A, config: RustlsConfig) -> Server<A, RustlsAcceptor> {
     let acceptor = RustlsAcceptor::new(config);
 
@@ -89,6 +56,7 @@ pub fn bind_rustls<A: Address>(addr: A, config: RustlsConfig) -> Server<A, Rustl
 }
 
 /// Create a tls server from existing `std::net::TcpListener`.
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 pub fn from_tcp_rustls(
     listener: std::net::TcpListener,
     config: RustlsConfig,
@@ -99,6 +67,7 @@ pub fn from_tcp_rustls(
 }
 
 /// Create a tls server from existing `std::os::unix::net::UnixListener`.
+#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls")))]
 #[cfg(unix)]
 pub fn from_unix_rustls(
     listener: std::os::unix::net::UnixListener,
@@ -304,6 +273,12 @@ impl fmt::Debug for RustlsConfig {
     }
 }
 
+const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
+
+fn set_alpn(config: &mut ServerConfig) {
+    config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|proto| proto.to_vec()).collect();
+}
+
 fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig> {
     let cert = cert.into_iter().map(CertificateDer::from).collect();
     let key = PrivateKeyDer::try_from(key).map_err(io_other)?;
@@ -313,7 +288,7 @@ fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig>
         .with_single_cert(cert, key)
         .map_err(io_other)?;
 
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    set_alpn(&mut config);
 
     Ok(config)
 }
@@ -337,7 +312,7 @@ fn config_from_pem(cert: Vec<u8>, key: Vec<u8>) -> io::Result<ServerConfig> {
                 // ...if we get a key now, we know that there are multiple keys and that's not allowed
                 if key.is_ok() {
                     return Err(io_other(
-                        "The private key file containsed multiple keys (it must only contain one)",
+                        "The private key file contains multiple keys (it must only contain one)",
                     ));
                 }
             }
@@ -377,16 +352,21 @@ async fn config_from_pem_chain_file(
     let key_cert: PrivateKeyDer =
         PrivateKeyDer::from_pem_slice(&key).map_err(|_| io_other("could not parse pem file"))?;
 
-    ServerConfig::builder()
+    let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert, key_cert)
-        .map_err(|_| io_other("invalid certificate"))
+        .map_err(|_| io_other("invalid certificate"))?;
+
+    set_alpn(&mut config);
+
+    Ok(config)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::handle::Handle;
-    use crate::tls_rustls::{self, RustlsConfig};
+    use crate::server::Server;
+    use crate::tls_rustls::{self, RustlsAcceptor, RustlsConfig};
     use axum::body::Body;
     use axum::routing::get;
     use axum::Router;
@@ -415,7 +395,6 @@ mod tests {
         assert_eq!(body.as_ref(), b"Hello, world!");
     }
 
-    #[ignore]
     #[tokio::test]
     async fn tls_timeout() {
         let (handle, _server_task, addr) = start_server().await;
@@ -429,6 +408,72 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
         // Timeout defaults to 1s during testing, and we have waited 1.5 seconds.
+        assert_eq!(handle.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn from_pem_chain_file_sets_alpn() {
+        let config = RustlsConfig::from_pem_chain_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            config.get_inner().alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn handshake_is_cancelled_on_shutdown() {
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+
+        let config = RustlsConfig::from_pem_file(
+            "examples/self-signed-certs/cert.pem",
+            "examples/self-signed-certs/key.pem",
+        )
+        .await
+        .unwrap();
+
+        // Make sure the test fails (via the timeout) rather than hanging if the
+        // handshake is not cancelled.
+        let acceptor = RustlsAcceptor::new(config).handshake_timeout(Duration::from_secs(30));
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+
+        let server_task = tokio::spawn(async move {
+            Server::bind(addr)
+                .acceptor(acceptor)
+                .handle(server_handle)
+                .serve(
+                    Router::new()
+                        .route("/", get(|| async { "Hello, world!" }))
+                        .into_make_service(),
+                )
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        // Open a connection but never start the TLS handshake.
+        let _stream = TcpStream::connect(addr).await.unwrap();
+
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(handle.connection_count(), 1);
+
+        handle.shutdown();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("server did not shut down")
+            .unwrap();
+        assert!(result.is_ok());
+
+        // The pending handshake task must be cancelled instead of running
+        // until the (30 second) handshake timeout.
+        sleep(Duration::from_millis(300)).await;
         assert_eq!(handle.connection_count(), 0);
     }
 
