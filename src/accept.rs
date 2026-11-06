@@ -2,11 +2,13 @@
 
 use http::Request;
 use hyper::body::Incoming;
+use socket2::SockRef;
 use std::{
     fmt,
     future::{Future, Ready},
     io,
     net::SocketAddr,
+    time::Duration,
 };
 use tokio::net::TcpStream;
 use tower_service::Service;
@@ -145,5 +147,193 @@ where
         req.extensions_mut().insert(self.local_addr);
 
         self.inner.call(req)
+    }
+}
+
+/// TCP keepalive parameters applied by [`TcpConfigAcceptor`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(dead_code)]
+pub struct TcpKeepaliveConfig {
+    time: Option<Duration>,
+    interval: Option<Duration>,
+    retries: Option<u32>,
+}
+
+impl TcpKeepaliveConfig {
+    /// Create a new keepalive configuration.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the amount of time an idle connection must be idle before the
+    /// first keepalive probe is sent.
+    pub fn time(mut self, time: Duration) -> Self {
+        self.time = Some(time);
+        self
+    }
+
+    /// Set the time between keepalive probes.
+    ///
+    /// This is only supported on some platforms; it is ignored elsewhere.
+    pub fn interval(mut self, interval: Duration) -> Self {
+        self.interval = Some(interval);
+        self
+    }
+
+    /// Set the number of failed probes before the connection is closed.
+    ///
+    /// This is only supported on some platforms; it is ignored elsewhere.
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = Some(retries);
+        self
+    }
+}
+
+/// TCP socket options applied to accepted connections.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TcpSocketConfig {
+    nodelay: bool,
+    keepalive: Option<TcpKeepaliveConfig>,
+}
+
+impl TcpSocketConfig {
+    /// Create a new configuration that leaves the socket options unchanged.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable `TCP_NODELAY`.
+    pub fn nodelay(mut self, nodelay: bool) -> Self {
+        self.nodelay = nodelay;
+        self
+    }
+
+    /// Set the keepalive parameters. Keepalive is disabled by default.
+    pub fn keepalive(mut self, keepalive: TcpKeepaliveConfig) -> Self {
+        self.keepalive = Some(keepalive);
+        self
+    }
+}
+
+/// An acceptor that applies TCP socket options to accepted connections.
+///
+/// It can be composed with TLS acceptors by setting it as the inner acceptor:
+/// `RustlsAcceptor::new(config).acceptor(TcpConfigAcceptor::new(...))`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TcpConfigAcceptor {
+    config: TcpSocketConfig,
+}
+
+impl TcpConfigAcceptor {
+    /// Create a new acceptor with the provided socket options.
+    pub fn new(config: TcpSocketConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl<S> Accept<TcpStream, S> for TcpConfigAcceptor {
+    type Stream = TcpStream;
+    type Service = S;
+    type Future = Ready<io::Result<(Self::Stream, Self::Service)>>;
+
+    fn accept(&self, stream: TcpStream, service: S) -> Self::Future {
+        std::future::ready(
+            (|| {
+                if self.config.nodelay {
+                    stream.set_nodelay(true)?;
+                }
+
+                if let Some(config) = self.config.keepalive {
+                    let mut keepalive = socket2::TcpKeepalive::new();
+
+                    if let Some(time) = config.time {
+                        keepalive = keepalive.with_time(time);
+                    }
+
+                    #[cfg(any(
+                        target_os = "android",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "fuchsia",
+                        target_os = "illumos",
+                        target_os = "ios",
+                        target_os = "visionos",
+                        target_os = "linux",
+                        target_os = "macos",
+                        target_os = "netbsd",
+                        target_os = "tvos",
+                        target_os = "watchos",
+                        target_os = "windows",
+                        target_os = "cygwin",
+                    ))]
+                    if let Some(interval) = config.interval {
+                        keepalive = keepalive.with_interval(interval);
+                    }
+
+                    #[cfg(any(
+                        target_os = "android",
+                        target_os = "dragonfly",
+                        target_os = "freebsd",
+                        target_os = "fuchsia",
+                        target_os = "illumos",
+                        target_os = "ios",
+                        target_os = "visionos",
+                        target_os = "linux",
+                        target_os = "macos",
+                        target_os = "netbsd",
+                        target_os = "tvos",
+                        target_os = "watchos",
+                        target_os = "windows",
+                        target_os = "cygwin",
+                    ))]
+                    if let Some(retries) = config.retries {
+                        keepalive = keepalive.with_retries(retries);
+                    }
+
+                    SockRef::from(&stream).set_tcp_keepalive(&keepalive)?;
+                }
+
+                Ok(())
+            })()
+            .map(|()| (stream, service)),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Accept, TcpConfigAcceptor, TcpKeepaliveConfig, TcpSocketConfig};
+    use std::time::Duration;
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[tokio::test]
+    async fn applies_nodelay_and_keepalive() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (client, server) = tokio::join!(TcpStream::connect(addr), listener.accept());
+        let _client = client.unwrap();
+        let (server, _) = server.unwrap();
+
+        let acceptor = TcpConfigAcceptor::new(
+            TcpSocketConfig::new()
+                .nodelay(true)
+                .keepalive(TcpKeepaliveConfig::new().time(Duration::from_secs(30))),
+        );
+
+        let (stream, ()) = acceptor.accept(server, ()).await.unwrap();
+
+        assert!(stream.nodelay().unwrap());
+
+        #[cfg(target_os = "linux")]
+        {
+            use socket2::SockRef;
+
+            let socket = SockRef::from(&stream);
+            assert_eq!(
+                socket.tcp_keepalive_time().unwrap(),
+                Duration::from_secs(30)
+            );
+        }
     }
 }

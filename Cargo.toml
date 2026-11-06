@@ -54,6 +54,7 @@ hyper-util = { version = "0.1.18", features = [
     "service",
     "tokio",
 ] }
+socket2 = { version = "0.6", features = ["all"] }
 
 # optional dependencies
 ## rustls
