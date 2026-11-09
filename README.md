@@ -24,26 +24,14 @@ This project is maintained by community independently from [axum].
 ```mermaid
 flowchart TB
     client(["client"])
-    subgraph transport["transport · bytes to HTTP"]
-        direction TB
-        tokio["tokio<br/>sockets, readiness, timers"]
-        hyper["hyper<br/>HTTP/1 and HTTP/2 codecs"]
-        util["hyper-util<br/>protocol detection, connection driver"]
-        tokio --> hyper --> util
-    end
-    server[["axum-server<br/>accept loop, task per connection, TLS"]]
-    subgraph application["application · connection to request"]
-        direction TB
-        maker["MakeService<br/>one Service per connection"]
-        layers["tower layers<br/>request/response middleware"]
-        router["axum Router<br/>routing, extractors, responses"]
-        maker --> layers --> router
-    end
-    client -->|request| tokio
-    util -->|HTTP/1 or HTTP/2| server
-    server -->|peer address| maker
-    router -.->|response| layers
-    layers -.-> maker -.-> server -.-> util -.-> hyper -.-> tokio -.-> client
+    transport["transport<br/>tokio · hyper · hyper-util"]
+    server[["axum-server<br/>accept loop · tasks · TLS"]]
+    app["application<br/>MakeService · tower · Router"]
+    client -->|request| transport
+    transport -->|HTTP/1 or HTTP/2| server
+    server -->|peer address| app
+    app -.->|response| client
+    classDef default rx:8px,ry:8px,font-size:14px
 ```
 
 Requests climb from the client. Responses return along the dashed path.
@@ -143,8 +131,38 @@ Server::bind(addr)
 
 TLS cannot be a tower layer. A layer sees a request, an acceptor sees the
 socket, before any HTTP byte. Returning an error drops the connection and
-reports it to [`accept_error_handler`][accept-error-handler]. Custom acceptors implement the trait
-directly.
+reports it to [`accept_error_handler`][accept-error-handler].
+
+A custom acceptor is a short implementation. This one rejects peers by IP
+before hyper reads anything:
+
+```rust
+use axum_server::accept::Accept;
+use std::{collections::HashSet, future::Ready, io, net::IpAddr, sync::Arc};
+use tokio::net::TcpStream;
+
+#[derive(Clone)]
+struct DenyList(Arc<HashSet<IpAddr>>);
+
+impl<S: Send + 'static> Accept<TcpStream, S> for DenyList {
+    type Stream = TcpStream;
+    type Service = S;
+    type Future = Ready<io::Result<(TcpStream, S)>>;
+
+    fn accept(&self, stream: TcpStream, service: S) -> Self::Future {
+        let allowed = match stream.peer_addr() {
+            Ok(peer) => !self.0.contains(&peer.ip()),
+            Err(_) => false,
+        };
+
+        std::future::ready(if allowed {
+            Ok((stream, service))
+        } else {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied peer"))
+        })
+    }
+}
+```
 
 ## TLS
 
