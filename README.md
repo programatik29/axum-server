@@ -21,7 +21,7 @@ This project is maintained by community independently from [axum].
 
 ## The stack
 
-![The axum-server stack](https://raw.githubusercontent.com/programatik29/axum-server/master/docs/stack.svg)
+![The axum-server stack](https://raw.githubusercontent.com/programatik29/axum-server/master/docs/stack.svg?v=4)
 
 Requests climb from the client. Responses return along the dashed path.
 
