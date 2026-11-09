@@ -133,7 +133,7 @@ TLS cannot be a tower layer. A layer sees a request, an acceptor sees the
 socket, before any HTTP byte. Returning an error drops the connection and
 reports it to [`accept_error_handler`][accept-error-handler].
 
-A custom acceptor is a short implementation. This one rejects peers by IP
+Custom acceptors implement the trait directly. This one rejects peers by IP
 before hyper reads anything:
 
 ```rust
