@@ -63,7 +63,7 @@ fs-err = { version = "3", features = ["tokio"], optional = true }
 rustls = { version = "0.23", default-features = false, optional = true }
 rustls-pki-types = { version = "1.9", features = ["std"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, optional = true }
-pkcs8 = { version = "0.10", features = ["encryption", "pem"], optional = true }
+pkcs8 = { version = "0.11", features = ["encryption", "pem"], optional = true }
 
 ## openssl
 openssl = { version = "0.10.61", optional = true }
