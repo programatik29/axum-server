@@ -4,38 +4,51 @@
 
 # axum-server
 
-axum-server is a [hyper] server implementation built for [axum] applications. It
-serves a tower make service rather than anything axum-specific, so the name
-undersells it a little: a proxy, or a service you already built from tower
-layers, runs on it unchanged.
+axum-server is the server layer for [axum] and other [tower] services. Point it
+at a port or Unix socket, hand it a [`Router`][router], and it owns what happens around
+the request: TLS through [rustls] or [openssl], HTTP/1 and HTTP/2 on one port,
+timeouts, certificate reloads, and shutdown.
 
-What it handles is everything around the app. A single port answers HTTP/1 and
-HTTP/2, TLS is terminated through [rustls] or [openssl] and can be reloaded
-while the server runs, and shutdown waits for requests that are still in
-flight. Your code stays a plain `Router`.
+It is the layer [hyper] 1.0 stopped shipping. Before that release,
+[`hyper::Server`][hyper-server] owned the accept loop and axum-server wrapped it. Since 0.6,
+the crate owns the loop itself.
+
+axum is the usual way to build the service, not a requirement. Prefer this over
+[`axum::serve`][axum-serve] when you need TLS, configurable timeouts, connection-level
+acceptors, a bounded drain, or live connection counts.
 
 This project is maintained by community independently from [axum].
 
-## Features
+## The stack
 
-- HTTP/1 and HTTP/2
-- HTTPS through [rustls] or [openssl].
-- TLS certificate hot-reloading.
-- TCP and Unix socket listeners.
-- High performance through [hyper].
-- Using [tower] make service API.
-- Very good [axum] compatibility. Likely to work with future [axum] releases.
-
-## Getting started
-
-Add the crate, with the TLS backend if you need one:
-
-```toml
-axum-server = "0.9"
-# axum-server = { version = "0.9", features = ["tls-rustls"] }
+```mermaid
+flowchart TB
+    client(["client"])
+    subgraph transport["transport · bytes to HTTP"]
+        direction TB
+        tokio["tokio<br/>sockets, readiness, timers"]
+        hyper["hyper<br/>HTTP/1 and HTTP/2 codecs"]
+        util["hyper-util<br/>protocol detection, connection driver"]
+        tokio --> hyper --> util
+    end
+    server[["axum-server<br/>accept loop, task per connection, TLS"]]
+    subgraph application["application · connection to request"]
+        direction TB
+        maker["MakeService<br/>one Service per connection"]
+        layers["tower layers<br/>request/response middleware"]
+        router["axum Router<br/>routing, extractors, responses"]
+        maker --> layers --> router
+    end
+    client -->|request| tokio
+    util -->|HTTP/1 or HTTP/2| server
+    server -->|peer address| maker
+    router -.->|response| layers
+    layers -.-> maker -.-> server -.-> util -.-> hyper -.-> tokio -.-> client
 ```
 
-Then hand it a router:
+Requests climb from the client. Responses return along the dashed path.
+
+## Serving model
 
 ```rust
 use axum::{routing::get, Router};
@@ -52,96 +65,44 @@ async fn main() {
 }
 ```
 
-## Examples
+Binding is lazy. The address is recorded up front, the socket opens when the
+server is polled. The [`MakeService`][make-service] is called once per connection with the peer
+address, and one task drives HTTP for that connection. HTTP/2 streams multiplex
+over that task, so blocking it stalls every stream. Blocking work belongs in
+[`spawn_blocking`][spawn-blocking].
 
-The rest of this page walks through the features in the order you tend to need
-them, with the code that uses each one.
+[`into_make_service()`][into-make-service] discards the peer address. Its connect-info variant keeps
+it as a [`ConnectInfo`][connect-info] extension, and [`LocalAddrAcceptor`][local-addr-acceptor] adds the address the
+client connected to.
 
-### TLS
+## Protocol negotiation
 
-Moving an app to HTTPS changes the bind call, not the app. With `tls-rustls`,
-`bind_rustls` takes a `RustlsConfig` and negotiates TLS 1.2 and 1.3 using the
-`aws-lc-rs` provider. The `tls-openssl` feature provides `bind_openssl` for
-deployments that already depend on OpenSSL.
+A cleartext listener has to guess. [hyper-util] assumes HTTP/2 and reads the
+first bytes. If they are not the HTTP/2 preface ([`PRI * HTTP/2.0`][h2-preface]), it falls
+back to HTTP/1.1. Over TLS, ALPN settles on [`h2`][h2-alpn] or [`http/1.1`][http-1-1] during the
+handshake, before any HTTP byte, so the client sends exactly one of them.
 
-```rust
-use axum_server::tls_rustls::RustlsConfig;
+Cleartext HTTP/2 requires prior knowledge: the client starts with the preface
+instead of negotiating. The older [`Upgrade: h2c`][h2-upgrade] handshake is deprecated and
+not supported.
 
-let config = RustlsConfig::from_pem_file("cert.pem", "key.pem").await?;
+The default mode keeps HTTP/1 upgrades enabled, which is how WebSocket
+handshakes work. Pinning a version with [`http1_only`][http1-only] or [`http2_only`][http2-only] switches
+to the non-upgrade path and disables WebSockets.
 
-axum_server::bind_rustls(addr, config)
-    .serve(app.into_make_service())
-    .await?;
-```
+HTTP/1 and HTTP/2 limits are configured separately on [`http_builder()`][http-builder].
+[`header_read_timeout`][header-read-timeout] guards against slow headers. [`keep_alive_interval`][keep-alive-interval] sends
+[`PING`][h2-ping] frames on idle HTTP/2 connections, and [`keep_alive_timeout`][keep-alive-timeout] closes ones
+that stop answering. A timer is installed by default, and hyper panics if a
+timeout is armed without one.
 
-Neither TLS feature is on by default, so an HTTP-only build carries no TLS
-dependency.
+## The accept hook
 
-### Rotating certificates without a restart
-
-`RustlsConfig` holds the live TLS settings rather than a snapshot of them, so
-loading new files replaces what the next handshake sees. Copy the new
-certificate into place and signal the process:
-
-```rust
-use axum_server::tls_rustls::RustlsConfig;
-use tokio::signal::unix::{signal, SignalKind};
-
-let config = RustlsConfig::from_pem_file("cert.pem", "key.pem").await?;
-
-let mut hup = signal(SignalKind::hangup())?;
-tokio::spawn({
-    let config = config.clone();
-    async move {
-        while hup.recv().await.is_some() {
-            config
-                .reload_from_pem_file("cert.pem", "key.pem")
-                .await
-                .unwrap();
-        }
-    }
-});
-
-axum_server::bind_rustls(addr, config)
-    .serve(app.into_make_service())
-    .await?;
-```
-
-Connections that are already open finish on the certificate they started with,
-so a rotation never interrupts them.
-
-### Seeing the handshake in a handler
-
-The TLS acceptors attach a `TlsInfo` to every request they handle, which is how
-a handler tells which hostname the client asked for or which certificate it
-presented. Name-based routing and mTLS authorization both read from it.
-
-```rust
-use axum::{extract::Extension, routing::get, Router};
-use axum_server::tls::TlsInfo;
-use std::sync::Arc;
-
-let app = Router::new().route("/", get(whoami));
-
-async fn whoami(Extension(info): Extension<Arc<TlsInfo>>) -> String {
-    format!(
-        "sni {:?}, alpn {:?}, client certs {}",
-        info.server_name,
-        info.alpn_protocol.as_deref().map(String::from_utf8_lossy),
-        info.peer_certificates.len(),
-    )
-}
-```
-
-`alpn_protocol` says whether the connection is h2 or HTTP/1.1. Both are
-advertised by default, so browsers and gRPC clients can share a port.
-
-### How connections are accepted
-
-Between the listener and hyper there is one hook, the `Accept` trait. It gets the
-socket and the per-connection service, and returns them, possibly wrapped or
-replaced. Everything connection-level in this crate is built on it, TLS
-included.
+Every connection passes through one hook: the [`Accept`][accept] trait. It runs once per
+connection, after the socket is accepted and before hyper reads a byte. It
+receives the raw stream and the per-connection service, then returns what hyper
+will use: a stream, possibly wrapped in TLS, and a service, possibly wrapped
+with per-connection state. Returning an error rejects the connection.
 
 ```rust
 pub trait Accept<I, S> {
@@ -153,7 +114,10 @@ pub trait Accept<I, S> {
 }
 ```
 
-Because TLS is just an acceptor, socket options can sit underneath it:
+Either associated type can change. [`RustlsAcceptor`][rustls-acceptor] consumes a TCP stream,
+performs the handshake, and returns a TLS stream plus a service carrying
+[`TlsInfo`][tls-info]. Inner acceptors run first, so socket options apply before the
+handshake.
 
 ```rust
 use axum_server::accept::{TcpConfigAcceptor, TcpKeepaliveConfig, TcpSocketConfig};
@@ -177,78 +141,126 @@ Server::bind(addr)
     .await?;
 ```
 
-The inner acceptor runs first, so `TCP_NODELAY` and keepalive are set on the raw
-socket before the handshake starts. The handshake timeout defaults to ten
-seconds, and five is a choice.
+TLS cannot be a tower layer. A layer sees a request, an acceptor sees the
+socket, before any HTTP byte. Returning an error drops the connection and
+reports it to [`accept_error_handler`][accept-error-handler]. Custom acceptors implement the trait
+directly.
 
-### Writing your own acceptor
+## TLS
 
-Implementing the trait gives you the socket before hyper has read a single HTTP
-byte. That is enough to turn away clients which connect and then say nothing,
-which scanners do all day and which otherwise costs a task and a file
-descriptor each.
+[`RustlsConfig`][rustls-config] wraps an [`ArcSwap`][arc-swap] around the current server config. Reload
+swaps the config used by new handshakes. Established connections keep the one
+they negotiated. No lock on the handshake path, no dropped connections.
 
 ```rust
-use axum_server::accept::Accept;
-use std::{future::Future, io, pin::Pin, time::Duration};
-use tokio::net::TcpStream;
+use axum_server::tls_rustls::RustlsConfig;
+use tokio::signal::unix::{signal, SignalKind};
 
-/// Drops a connection if the client sends no bytes within the timeout.
-#[derive(Clone)]
-struct IdleClientGuard(Duration);
+let config = RustlsConfig::from_pem_file("cert.pem", "key.pem").await?;
 
-impl<S: Send + 'static> Accept<TcpStream, S> for IdleClientGuard {
-    type Stream = TcpStream;
-    type Service = S;
-    type Future = Pin<Box<dyn Future<Output = io::Result<(TcpStream, S)>> + Send>>;
-
-    fn accept(&self, stream: TcpStream, service: S) -> Self::Future {
-        let timeout = self.0;
-        Box::pin(async move {
-            // Wait for the first byte without consuming it.
-            let mut byte = [0u8; 1];
-            tokio::time::timeout(timeout, stream.peek(&mut byte))
-                .await
-                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "idle client"))??;
-            Ok((stream, service))
-        })
+let mut hup = signal(SignalKind::hangup())?;
+tokio::spawn({
+    let config = config.clone();
+    async move {
+        while hup.recv().await.is_some() {
+            config.reload_from_pem_file("cert.pem", "key.pem").await.unwrap();
+        }
     }
-}
+});
+
+axum_server::bind_rustls(addr, config)
+    .serve(app.into_make_service())
+    .await?;
 ```
 
-Pass it to `Server::bind(addr).acceptor(...)` and it composes with the built-in
-acceptors the same way they compose with each other. The stream type is an
-associated type, which is what lets the TLS acceptor wrap a `TcpStream` without
-the rest of the server knowing.
+PEM and DER constructors set ALPN ([`h2`][h2-alpn] and [`http/1.1`][http-1-1]). Building a
+[`ServerConfig`][server-config] yourself means setting it too. Forgetting it silently disables [`h2`][h2-alpn].
+[`from_sni_pem_files`][sni-pem-files] picks certificates by exact name, with no fallback. After
+the handshake, handlers get SNI, ALPN, and any client certificates through
+[`TlsInfo`][tls-info]. Client certificates require a verifier such as
+[`WebPkiClientVerifier`][webpki-client-verifier].
 
-### Unix sockets
+The rustls provider is process-global. The [`tls-rustls`][tls-rustls-docs] feature selects
+[`aws-lc-rs`][aws-lc-rs], while [`tls-rustls-no-provider`][features] leaves the choice to the
+application, which installs one once. Ambiguous features make config
+construction panic. [`tls-openssl`][tls-openssl-docs] is for environments already standardized on
+OpenSSL or FIPS. Handshakes time out after ten seconds by default.
 
-A service that only local processes talk to does not need a port. A Unix socket
-keeps it off the network and leaves access to filesystem permissions, which
-covers sidecars and anything sitting behind a local nginx.
+## Shutdown
+
+Shutdown stops the listener from accepting new connections, then decides what
+happens to requests already in flight. [`shutdown()`][shutdown] cancels them
+immediately, resetting in-flight requests.
+[`graceful_shutdown`][graceful-shutdown] with a deadline lets connections
+finish (HTTP/1 closes after the current response, HTTP/2 sends
+[`GOAWAY`][h2-goaway]), waits until the deadline, then cancels the rest.
+Without a deadline it waits indefinitely.
 
 ```rust
-use axum::{routing::get, Router};
+use axum_server::Handle;
+use std::time::Duration;
+
+let handle = Handle::new();
+
+let shutdown = handle.clone();
+tokio::spawn(async move {
+    tokio::signal::ctrl_c().await.unwrap();
+    shutdown.graceful_shutdown(Some(Duration::from_secs(30)));
+});
+
+// Resolves when the drain finishes or the deadline expires.
+axum_server::bind(addr)
+    .handle(handle)
+    .serve(app.into_make_service())
+    .await?;
+```
+
+On [`SIGTERM`][signal-7], drain with a deadline shorter than the grace period, wait for the
+server to return, then exit. [`connection_count()`][connection-count] reports the live count, and
+[`listening()`][listening] returns the bound address.
+
+## Bounds
+
+Each layer sees a different part of a request, so the timeouts do not overlap:
+
+- TLS handshake: [`handshake_timeout`][handshake-timeout].
+- Protocol detection and first request: [`first_request_timeout`][first-request-timeout]. Without it, a
+  silent client holds a task and a descriptor.
+- Headers: [`header_read_timeout`][header-read-timeout]. hyper's default is 30s, disabled here to
+  preserve older behavior.
+- Idle h2: [`keep_alive_interval`][keep-alive-interval] and [`keep_alive_timeout`][keep-alive-timeout] (PING).
+- Idle TCP: [`TcpKeepaliveConfig`][tcp-keepalive-config] (kernel probes).
+
+There is no connection cap. The listen queue and the make service's readiness
+are the only backpressure. An acceptor runs after accept, so it can reject but
+not throttle.
+
+## Listeners
+
+An IP address binds TCP. A Unix socket address binds Unix, with identical TLS,
+acceptors, and shutdown. A Unix socket has no port, is unreachable from the
+network, and is governed by filesystem permissions. Its path must not already
+exist on restart, unless systemd owns it, in which case pass the inherited
+listener through [`from_unix`][from-unix].
+
+```rust
 use std::os::unix::net::SocketAddr;
 
-let app = Router::new().route("/health", get(|| async { "ok" }));
-
 let addr = SocketAddr::from_pathname("/run/myapp.sock")?;
+
 axum_server::bind(addr)
     .serve(app.into_make_service())
     .await?;
 ```
 
-The address is generic in this server, so shutdown, TLS and acceptors behave
-exactly as they do on TCP. `from_unix_rustls` covers the case where the socket
-itself needs TLS.
+[`from_tcp`][from-tcp] and [`from_unix`][from-unix] accept pre-bound listeners for socket activation and
+for options set before handoff, such as [`SO_REUSEPORT`][socket-7] or the backlog. Several
+addresses mean several servers. Clones of one [`Handle`][handle] drain all of them.
 
-### Serving without axum
+## Without axum
 
-The name says axum, but `serve` takes the crate's `MakeService` bound, which any
-tower make service satisfies as long as its futures and bodies are `Send`. A
-reverse proxy or a service you already built from tower layers can use the same
-TLS, listeners and shutdown code.
+[`serve`][serve] takes a tower [`MakeService`][make-service]: a service of services, with the connection
+address as its target. A plain [`service_fn`][service-fn] is enough.
 
 ```rust
 use bytes::Bytes;
@@ -270,76 +282,94 @@ axum_server::bind(addr)
     .await?;
 ```
 
-A plain `service_fn` answers every request here, and the client address arrives
-as an ordinary request extension. There are no axum types involved. axum's
-`into_make_service()` is simply the most common way to satisfy the bound.
+The outer maker receives the peer address, and [`AddExtension`][add-extension] carries it into
+the request. No axum type appears, and the same TLS, listeners, and shutdown
+apply.
 
-### Shutdown without dropping requests
-
-On Kubernetes a pod gets `SIGTERM`, then a grace period, then the kill. If the
-process exits on the first signal, requests in flight are reset and clients see
-errors. `Handle` separates stopping the listener from ending the connections
-that are still running.
-
-```rust
-use axum_server::Handle;
-use std::time::Duration;
-
-let handle = Handle::new();
-
-let watcher = handle.clone();
-tokio::spawn(async move {
-    tokio::signal::ctrl_c().await.unwrap();
-    watcher.graceful_shutdown(Some(Duration::from_secs(30)));
-
-    while watcher.connection_count() > 0 {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    println!("drained");
-});
-
-axum_server::bind(addr)
-    .handle(handle)
-    .serve(app.into_make_service())
-    .await?;
-```
-
-`graceful_shutdown(None)` waits without a deadline, and `shutdown()` skips the
-waiting. The same handle reports the live number through `connection_count()` and
-the bound address through `listening()`, which is how a server on port `0` finds
-its port.
-
-More examples live in [examples](/examples).
+Runnable versions are in
+[examples](https://github.com/programatik29/axum-server/tree/master/examples).
 
 ## Cargo features
 
-- `tls-rustls` (default off) - TLS support through [rustls] with the
-  `aws-lc-rs` cryptography provider. Enables TLS 1.2 and TLS 1.3.
-- `tls-rustls-no-provider` - TLS support through [rustls] without selecting a
-  cryptography provider. Use this if you want to use `ring` or install a
-  process-level provider yourself. For example:
-  ```toml
-  axum-server = { version = "0.9", features = ["tls-rustls-no-provider"] }
-  rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-  ```
-- `tls-rustls-encrypted-keys` - support loading encrypted PKCS#8 private keys
-  with `RustlsConfig`.
-- `tls-openssl` - TLS support through [openssl].
+```toml
+[dependencies]
+axum-server = "0.9"
+# axum-server = { version = "0.9", features = ["tls-rustls"] }
+```
 
-## Minimum Supported Rust Version
+- [`tls-rustls`][tls-rustls-docs] — [rustls] with [`aws-lc-rs`][aws-lc-rs], TLS 1.2 and 1.3.
+- [`tls-rustls-no-provider`][features] — rustls without a provider, so choose [`ring`][ring] or
+  install one at startup.
+- [`tls-rustls-encrypted-keys`][features] — encrypted PKCS#8 private keys.
+- [`tls-openssl`][tls-openssl-docs] — TLS through [openssl].
 
-axum-server's MSRV is `1.82`.
+No TLS backend is on by default.
+
+## MSRV
+
+1.82.
 
 ## Safety
 
-This crate uses `#![forbid(unsafe_code)]` to ensure everything is implemented in 100% safe Rust.
+[`#![forbid(unsafe_code)]`][forbid].
 
 ## License
 
-This project is licensed under the [MIT license](LICENSE).
+[MIT](LICENSE).
 
+[router]: https://docs.rs/axum/latest/axum/struct.Router.html
+[axum-serve]: https://docs.rs/axum/latest/axum/fn.serve.html
+[connect-info]: https://docs.rs/axum/latest/axum/extract/struct.ConnectInfo.html
+[into-make-service]: https://docs.rs/axum/latest/axum/struct.Router.html#method.into_make_service
+[hyper-server]: https://docs.rs/hyper/0.14/hyper/server/struct.Server.html
+[make-service]: https://docs.rs/tower/latest/tower/trait.MakeService.html
+[spawn-blocking]: https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html
+[local-addr-acceptor]: https://docs.rs/axum-server/latest/axum_server/accept/struct.LocalAddrAcceptor.html
+[h2-preface]: https://www.rfc-editor.org/rfc/rfc9113.html#section-3.4
+[h2-alpn]: https://www.rfc-editor.org/rfc/rfc9113.html#section-3.1
+[http-1-1]: https://www.rfc-editor.org/rfc/rfc9112.html
+[h2-upgrade]: https://www.rfc-editor.org/rfc/rfc9113.html#section-3.1
+[http1-only]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.http1_only
+[http2-only]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.http2_only
+[http-builder]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.http_builder
+[header-read-timeout]: https://docs.rs/hyper-util/latest/hyper_util/server/conn/auto/struct.Http1Builder.html#method.header_read_timeout
+[keep-alive-interval]: https://docs.rs/hyper-util/latest/hyper_util/server/conn/auto/struct.Http2Builder.html#method.keep_alive_interval
+[keep-alive-timeout]: https://docs.rs/hyper-util/latest/hyper_util/server/conn/auto/struct.Http2Builder.html#method.keep_alive_timeout
+[h2-ping]: https://www.rfc-editor.org/rfc/rfc9113.html#section-6.7
+[accept]: https://docs.rs/axum-server/latest/axum_server/accept/trait.Accept.html
+[rustls-acceptor]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsAcceptor.html
+[tls-info]: https://docs.rs/axum-server/latest/axum_server/tls/struct.TlsInfo.html
+[accept-error-handler]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.accept_error_handler
+[rustls-config]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsConfig.html
+[arc-swap]: https://docs.rs/arc-swap/latest/arc_swap/type.ArcSwap.html
+[server-config]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConfig.html
+[sni-pem-files]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsConfig.html#method.from_sni_pem_files
+[webpki-client-verifier]: https://docs.rs/rustls/latest/rustls/server/struct.WebPkiClientVerifier.html
+[tls-rustls-docs]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/index.html
+[features]: https://docs.rs/crate/axum-server/latest/features
+[aws-lc-rs]: https://crates.io/crates/aws-lc-rs
+[tls-openssl-docs]: https://docs.rs/axum-server/latest/axum_server/tls_openssl/index.html
+[shutdown]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html#method.shutdown
+[graceful-shutdown]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html#method.graceful_shutdown
+[h2-goaway]: https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8
+[signal-7]: https://man7.org/linux/man-pages/man7/signal.7.html
+[connection-count]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html#method.connection_count
+[listening]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html#method.listening
+[handshake-timeout]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsAcceptor.html#method.handshake_timeout
+[first-request-timeout]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.first_request_timeout
+[tcp-keepalive-config]: https://docs.rs/axum-server/latest/axum_server/accept/struct.TcpKeepaliveConfig.html
+[from-unix]: https://docs.rs/axum-server/latest/axum_server/fn.from_unix.html
+[from-tcp]: https://docs.rs/axum-server/latest/axum_server/fn.from_tcp.html
+[socket-7]: https://man7.org/linux/man-pages/man7/socket.7.html
+[handle]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html
+[serve]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.serve
+[service-fn]: https://docs.rs/tower/latest/tower/fn.service_fn.html
+[add-extension]: https://docs.rs/tower-http/latest/tower_http/add_extension/struct.AddExtension.html
+[ring]: https://crates.io/crates/ring
+[forbid]: https://doc.rust-lang.org/reference/attributes/diagnostics.html#the-forbid-attribute
 [axum]: https://crates.io/crates/axum
 [hyper]: https://crates.io/crates/hyper
+[hyper-util]: https://crates.io/crates/hyper-util
 [openssl]: https://crates.io/crates/openssl
 [rustls]: https://crates.io/crates/rustls
 [tower]: https://crates.io/crates/tower
