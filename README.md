@@ -21,18 +21,7 @@ This project is maintained by community independently from [axum].
 
 ## The stack
 
-```mermaid
-flowchart TB
-    client(["client"])
-    transport["transport<br/>tokio · hyper · hyper-util"]
-    server[["axum-server<br/>accept loop · tasks · TLS"]]
-    app["application<br/>MakeService · tower · Router"]
-    client -->|request| transport
-    transport -->|HTTP/1 or HTTP/2| server
-    server -->|peer address| app
-    app -.->|response| client
-    classDef default rx:8px,ry:8px,font-size:14px
-```
+![The axum-server stack](https://raw.githubusercontent.com/programatik29/axum-server/master/docs/stack.svg)
 
 Requests climb from the client. Responses return along the dashed path.
 
