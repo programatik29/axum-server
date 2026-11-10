@@ -226,6 +226,29 @@ On [`SIGTERM`][signal-7], drain with a deadline shorter than the grace period, w
 server to return, then exit. [`connection_count()`][connection-count] reports the live count, and
 [`listening()`][listening] returns the bound address.
 
+### One connection
+
+A handler can close the connection that dispatched the request by extracting
+[`ConnectionShutdown`][connection-shutdown], which axum-server adds to every request.
+[`shutdown()`][connection-shutdown-shutdown] cancels the connection immediately, while
+[`graceful_shutdown()`][connection-shutdown-graceful] delivers the current response and then
+closes. The handle can also be moved into another task, for example to enforce a deadline on a
+slow client.
+
+```rust
+use axum::{extract::Extension, routing::get, Router};
+use axum_server::ConnectionShutdown;
+
+async fn handle(Extension(shutdown): Extension<ConnectionShutdown>) -> &'static str {
+    shutdown.graceful_shutdown();
+    "goodbye"
+}
+
+let app: Router = Router::new().route("/", get(handle));
+```
+
+On HTTP/2 the connection carries many streams, so closing it closes all of them.
+
 ## Bounds
 
 Each layer sees a different part of a request, so the timeouts do not overlap:
@@ -365,6 +388,9 @@ No TLS backend is on by default.
 [handshake-timeout]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsAcceptor.html#method.handshake_timeout
 [first-request-timeout]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.first_request_timeout
 [tcp-keepalive-config]: https://docs.rs/axum-server/latest/axum_server/accept/struct.TcpKeepaliveConfig.html
+[connection-shutdown]: https://docs.rs/axum-server/latest/axum_server/struct.ConnectionShutdown.html
+[connection-shutdown-shutdown]: https://docs.rs/axum-server/latest/axum_server/struct.ConnectionShutdown.html#method.shutdown
+[connection-shutdown-graceful]: https://docs.rs/axum-server/latest/axum_server/struct.ConnectionShutdown.html#method.graceful_shutdown
 [from-unix]: https://docs.rs/axum-server/latest/axum_server/fn.from_unix.html
 [from-tcp]: https://docs.rs/axum-server/latest/axum_server/fn.from_tcp.html
 [socket-7]: https://man7.org/linux/man-pages/man7/socket.7.html

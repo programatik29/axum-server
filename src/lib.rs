@@ -98,6 +98,7 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod connection;
 mod handle;
 mod notify_once;
 mod server;
@@ -107,6 +108,7 @@ pub mod service;
 
 pub use self::{
     // addr_incoming_config::AddrIncomingConfig,
+    connection::ConnectionShutdown,
     handle::Handle,
     // http_config::HttpConfig,
     server::{bind, from_tcp, AddrListener, Address, Server},

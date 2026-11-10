@@ -1,5 +1,6 @@
 use crate::{
     accept::{Accept, DefaultAcceptor},
+    connection::{ConnectionShutdown, ShutdownKind},
     handle::Handle,
     service::{MakeService, SendService},
 };
@@ -23,7 +24,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{oneshot, watch},
 };
 use tower_service::Service;
 
@@ -422,6 +423,8 @@ impl<A: Address, Acc> Server<A, Acc> {
                     let io = TokioIo::new(stream);
                     let service = send_service.into_service();
 
+                    let (shutdown_tx, mut shutdown_rx) = watch::channel(ShutdownKind::None);
+
                     let (first_request_rx, notify_first_request) = match first_request_timeout {
                         Some(_) => {
                             let (tx, rx) = oneshot::channel();
@@ -431,6 +434,10 @@ impl<A: Address, Acc> Server<A, Acc> {
                     };
 
                     let service = FirstRequestService::new(service, notify_first_request);
+                    let service = ConnectionService::new(
+                        service,
+                        ConnectionShutdown::new(shutdown_tx.clone()),
+                    );
                     let service = TowerToHyperService::new(service);
                     let serve_future = match http_version {
                         Some(_) => Either::Left(builder.serve_connection(io, service)),
@@ -458,21 +465,44 @@ impl<A: Address, Acc> Server<A, Acc> {
                         }
                     }
 
-                    tokio::select! {
-                        biased;
-                        _ = watcher.wait_graceful_shutdown() => {
+                    let mut graceful = false;
+                    let mut apply_graceful = false;
+
+                    loop {
+                        if apply_graceful {
+                            apply_graceful = false;
+
                             match &mut serve_future {
-                                Either::Left(serve_future) => serve_future.as_mut().graceful_shutdown(),
-                                Either::Right(serve_future) => serve_future.as_mut().graceful_shutdown(),
-                            }
-                            tokio::select! {
-                                biased;
-                                _ = watcher.wait_shutdown() => (),
-                                _ = &mut serve_future => (),
+                                Either::Left(serve_future) => {
+                                    serve_future.as_mut().graceful_shutdown()
+                                }
+                                Either::Right(serve_future) => {
+                                    serve_future.as_mut().graceful_shutdown()
+                                }
                             }
                         }
-                        _ = watcher.wait_shutdown() => (),
-                        _ = &mut serve_future => (),
+
+                        tokio::select! {
+                            biased;
+                            _ = watcher.wait_shutdown() => return,
+                            _ = watcher.wait_graceful_shutdown(), if !graceful => {
+                                graceful = true;
+                                apply_graceful = true;
+                            }
+                            // Keeping `shutdown_tx` alive means this only
+                            // resolves when a handler asks to close.
+                            _ = shutdown_rx.changed() => {
+                                match *shutdown_rx.borrow() {
+                                    ShutdownKind::Abort => return,
+                                    ShutdownKind::Graceful if !graceful => {
+                                        graceful = true;
+                                        apply_graceful = true;
+                                    }
+                                    ShutdownKind::None | ShutdownKind::Graceful => {}
+                                }
+                            }
+                            _ = &mut serve_future => return,
+                        }
                     }
                 });
             }
@@ -564,6 +594,39 @@ where
     }
 }
 
+/// A service wrapper that adds the connection shutdown handle to request
+/// extensions.
+#[derive(Clone, Debug)]
+struct ConnectionService<S> {
+    inner: S,
+    shutdown: ConnectionShutdown,
+}
+
+impl<S> ConnectionService<S> {
+    fn new(inner: S, shutdown: ConnectionShutdown) -> Self {
+        Self { inner, shutdown }
+    }
+}
+
+impl<S> Service<Request<Incoming>> for ConnectionService<S>
+where
+    S: Service<Request<Incoming>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: Request<Incoming>) -> Self::Future {
+        req.extensions_mut().insert(self.shutdown.clone());
+
+        self.inner.call(req)
+    }
+}
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
@@ -576,8 +639,10 @@ mod tests {
         accept::{Accept, LocalAddr, LocalAddrAcceptor},
         handle::Handle,
         server::Server,
+        ConnectionShutdown,
     };
     use axum::body::Body;
+    use axum::extract::State;
     use axum::response::Response;
     use axum::routing::post;
     use axum::{routing::get, Extension, Router};
@@ -589,7 +654,12 @@ mod tests {
     use hyper::client;
     use hyper::client::conn::{http1, http2};
     use hyper_util::rt::{TokioExecutor, TokioIo};
-    use std::{io, net::SocketAddr as IpSocketAddr, time::Duration};
+    use std::{
+        io,
+        net::SocketAddr as IpSocketAddr,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
     use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
@@ -631,6 +701,119 @@ mod tests {
 
         // Connection should finish soon.
         let _ = timeout(Duration::from_secs(1), conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_graceful_shutdown_sends_response_then_closes() {
+        let (handle, _server_task, addr) = start_server_with_app(Router::new().route(
+            "/",
+            get(
+                |Extension(shutdown): Extension<ConnectionShutdown>| async move {
+                    shutdown.graceful_shutdown();
+                    "goodbye"
+                },
+            ),
+        ))
+        .await;
+
+        let (mut client, conn) = connect(addr).await;
+
+        client.ready().await.unwrap();
+        let response = client
+            .send_request(Request::new(Body::empty()))
+            .await
+            .unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"goodbye");
+
+        timeout(Duration::from_secs(1), conn)
+            .await
+            .unwrap()
+            .unwrap();
+        wait_for_no_connections(&handle).await;
+
+        do_empty_request_h1(&mut client).await.unwrap_err();
+    }
+
+    #[derive(Clone)]
+    struct ShutdownHolder(Arc<Mutex<Option<ConnectionShutdown>>>);
+
+    async fn stash_shutdown(
+        State(holder): State<ShutdownHolder>,
+        Extension(shutdown): Extension<ConnectionShutdown>,
+    ) -> &'static str {
+        *holder.0.lock().unwrap() = Some(shutdown);
+        "ok"
+    }
+
+    #[tokio::test]
+    async fn connection_shutdown_aborts_connection() {
+        let holder = ShutdownHolder(Arc::new(Mutex::new(None)));
+
+        let app = Router::new()
+            .route("/", get(stash_shutdown))
+            .with_state(holder.clone());
+
+        let (handle, _server_task, addr) = start_server_with_app(app).await;
+
+        let (mut client, _conn) = connect(addr).await;
+
+        client.ready().await.unwrap();
+        let response = client
+            .send_request(Request::new(Body::empty()))
+            .await
+            .unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"ok");
+
+        holder.0.lock().unwrap().take().unwrap().shutdown();
+
+        wait_for_no_connections(&handle).await;
+
+        do_empty_request_h1(&mut client).await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn connection_graceful_shutdown_closes_http2_connection() {
+        let (handle, _server_task, addr) = start_server_with_app(Router::new().route(
+            "/",
+            get(
+                |Extension(shutdown): Extension<ConnectionShutdown>| async move {
+                    shutdown.graceful_shutdown();
+                    "goodbye"
+                },
+            ),
+        ))
+        .await;
+
+        let (mut client, conn) = connect_h2(addr).await;
+
+        client.ready().await.unwrap();
+        let response = client
+            .send_request(Request::new(Body::empty()))
+            .await
+            .unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"goodbye");
+
+        timeout(Duration::from_secs(1), conn)
+            .await
+            .unwrap()
+            .unwrap();
+        wait_for_no_connections(&handle).await;
+    }
+
+    async fn wait_for_no_connections(handle: &Handle<IpSocketAddr>) {
+        timeout(Duration::from_secs(1), async {
+            while handle.connection_count() != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     // Test graceful shutdown with no timeout.
@@ -1094,6 +1277,30 @@ mod tests {
         IpSocketAddr,
     ) {
         start_server_with_http_version(None).await
+    }
+
+    async fn start_server_with_app(
+        app: Router,
+    ) -> (
+        Handle<IpSocketAddr>,
+        JoinHandle<io::Result<()>>,
+        IpSocketAddr,
+    ) {
+        let handle = Handle::new();
+
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(async move {
+            let addr = IpSocketAddr::from(([127, 0, 0, 1], 0));
+
+            Server::bind(addr)
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+        });
+
+        let addr = handle.listening().await.unwrap();
+
+        (handle, server_task, addr)
     }
 
     async fn connect(addr: IpSocketAddr) -> (http1::SendRequest<Body>, JoinHandle<()>) {
