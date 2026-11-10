@@ -285,7 +285,32 @@ axum_server::bind(addr)
 
 [`from_tcp`][from-tcp] and [`from_unix`][from-unix] accept pre-bound listeners for socket activation and
 for options set before handoff, such as [`SO_REUSEPORT`][socket-7] or the backlog. Several
-addresses mean several servers. Clones of one [`Handle`][handle] drain all of them.
+addresses mean several servers.
+
+A [`Handle<A>`][handle] belongs to one address type and reports one listening address.
+[`Control`][control] is address-agnostic: build a handle for each server with
+[`Handle::with_control`][handle-with-control], and one `graceful_shutdown` drains every listener.
+`connection_count` sums them, so TCP and Unix can share one control.
+
+```rust
+use axum_server::{Control, Handle};
+use std::{net::SocketAddr, time::Duration};
+
+let control = Control::new();
+
+let tcp_handle = Handle::<SocketAddr>::with_control(control.clone());
+let tcp = axum_server::bind(tcp_addr).handle(tcp_handle.clone());
+
+#[cfg(unix)]
+let unix_handle = Handle::<std::os::unix::net::SocketAddr>::with_control(control.clone());
+#[cfg(unix)]
+let unix = axum_server::bind(unix_addr).handle(unix_handle.clone());
+
+// Serve both, then drain them together.
+control.graceful_shutdown(Some(Duration::from_secs(30)));
+```
+
+See [`examples/multiple_listeners.rs`][multiple-listeners-example] for a full program.
 
 ## Without axum
 
@@ -395,6 +420,9 @@ No TLS backend is on by default.
 [from-tcp]: https://docs.rs/axum-server/latest/axum_server/fn.from_tcp.html
 [socket-7]: https://man7.org/linux/man-pages/man7/socket.7.html
 [handle]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html
+[control]: https://docs.rs/axum-server/latest/axum_server/struct.Control.html
+[handle-with-control]: https://docs.rs/axum-server/latest/axum_server/struct.Handle.html#method.with_control
+[multiple-listeners-example]: https://github.com/programatik29/axum-server/blob/master/examples/multiple_listeners.rs
 [serve]: https://docs.rs/axum-server/latest/axum_server/struct.Server.html#method.serve
 [service-fn]: https://docs.rs/tower/latest/tower/fn.service_fn.html
 [add-extension]: https://docs.rs/tower-http/latest/tower_http/add_extension/struct.AddExtension.html

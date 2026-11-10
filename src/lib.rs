@@ -22,7 +22,8 @@
 //! provided [`SocketAddr`] when [`serve`] is called.
 //!
 //! A [`Handle`] can be passed to [`Server`](Server::handle) for additional utilities like shutdown
-//! and graceful shutdown.
+//! and graceful shutdown. To share shutdown across servers listening on different address types,
+//! build each handle with [`Handle::with_control`] from one [`Control`].
 //!
 //! [`bind_rustls`] can be called by providing [`RustlsConfig`] to create a HTTPS [`Server`] that
 //! will bind on provided [`SocketAddr`]. [`RustlsConfig`] can be cloned, reload methods can be
@@ -109,7 +110,7 @@ pub mod service;
 pub use self::{
     // addr_incoming_config::AddrIncomingConfig,
     connection::ConnectionShutdown,
-    handle::Handle,
+    handle::{Control, Handle},
     // http_config::HttpConfig,
     server::{bind, from_tcp, AddrListener, Address, Server},
 };

@@ -291,6 +291,10 @@ impl<A: Address, Acc> Server<A, Acc> {
     }
 
     /// Provide a handle for additional utilities.
+    ///
+    /// To share shutdown and connection counting between servers listening on
+    /// different address types, build each server's handle from one
+    /// [`Control`](crate::Control) with [`Handle::with_control`].
     pub fn handle(mut self, handle: Handle<A>) -> Self {
         self.handle = handle;
         self
@@ -637,7 +641,7 @@ pub(crate) fn io_other<E: Into<BoxError>>(error: E) -> io::Error {
 mod tests {
     use crate::{
         accept::{Accept, LocalAddr, LocalAddrAcceptor},
-        handle::Handle,
+        handle::{Control, Handle},
         server::Server,
         ConnectionShutdown,
     };
@@ -814,6 +818,125 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn control_shares_tcp_servers() {
+        let control = Control::new();
+        let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+        let handle_a = Handle::<IpSocketAddr>::with_control(control.clone());
+        let handle_b = Handle::<IpSocketAddr>::with_control(control.clone());
+
+        let server_a = tokio::spawn({
+            let app = app.clone();
+            let server =
+                Server::bind(IpSocketAddr::from(([127, 0, 0, 1], 0))).handle(handle_a.clone());
+
+            async move { server.serve(app.into_make_service()).await }
+        });
+        let server_b = tokio::spawn({
+            let app = app.clone();
+            let server =
+                Server::bind(IpSocketAddr::from(([127, 0, 0, 1], 0))).handle(handle_b.clone());
+
+            async move { server.serve(app.into_make_service()).await }
+        });
+
+        let addr_a = handle_a.listening().await.unwrap();
+        let addr_b = handle_b.listening().await.unwrap();
+        assert_ne!(addr_a, addr_b);
+
+        let (mut client_a, _conn_a) = connect(addr_a).await;
+        let (mut client_b, _conn_b) = connect(addr_b).await;
+        do_empty_request_h1(&mut client_a).await.unwrap();
+        do_empty_request_h1(&mut client_b).await.unwrap();
+
+        assert_eq!(control.connection_count(), 2);
+
+        control.graceful_shutdown(None);
+
+        timeout(Duration::from_secs(1), server_a)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(1), server_b)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(control.connection_count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn control_shares_tcp_and_unix_servers() {
+        use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener as StdUnixListener};
+        use tokio::net::UnixStream;
+
+        let control = Control::new();
+        let app = Router::new().route("/", get(|| async { "Hello, world!" }));
+
+        let tcp_handle = Handle::<IpSocketAddr>::with_control(control.clone());
+        let unix_handle = Handle::<UnixSocketAddr>::with_control(control.clone());
+
+        let tcp_server = tokio::spawn({
+            let app = app.clone();
+            let server =
+                Server::bind(IpSocketAddr::from(([127, 0, 0, 1], 0))).handle(tcp_handle.clone());
+
+            async move { server.serve(app.into_make_service()).await }
+        });
+
+        let path =
+            std::env::temp_dir().join(format!("axum-server-control-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = StdUnixListener::bind(&path).unwrap();
+
+        let unix_server = tokio::spawn({
+            let app = app.clone();
+            let server = crate::from_unix(listener)
+                .unwrap()
+                .handle(unix_handle.clone());
+
+            async move { server.serve(app.into_make_service()).await }
+        });
+
+        let tcp_addr = tcp_handle.listening().await.unwrap();
+        let unix_addr = unix_handle.listening().await.unwrap();
+        assert_eq!(unix_addr.as_pathname(), Some(path.as_path()));
+
+        let (mut tcp_client, _tcp_conn) = connect(tcp_addr).await;
+        do_empty_request_h1(&mut tcp_client).await.unwrap();
+
+        let io = TokioIo::new(UnixStream::connect(&path).await.unwrap());
+        let (mut unix_client, unix_conn) = client::conn::http1::handshake(io).await.unwrap();
+        let unix_conn = tokio::spawn(async move {
+            let _ = unix_conn.await;
+        });
+        do_empty_request_h1(&mut unix_client).await.unwrap();
+
+        assert_eq!(control.connection_count(), 2);
+
+        control.graceful_shutdown(None);
+
+        timeout(Duration::from_secs(1), tcp_server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        timeout(Duration::from_secs(1), unix_server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(control.connection_count(), 0);
+
+        let _ = timeout(Duration::from_secs(1), unix_conn).await;
+        let _ = std::fs::remove_file(&path);
     }
 
     // Test graceful shutdown with no timeout.
