@@ -89,6 +89,11 @@ cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
+name = "async_sni"
+required-features = ["tls-rustls"]
+doc-scrape-examples = true
+
+[[example]]
 name = "from_std_listener_rustls"
 required-features = ["tls-rustls"]
 doc-scrape-examples = true

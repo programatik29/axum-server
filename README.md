@@ -182,7 +182,10 @@ axum_server::bind_rustls(addr, config)
 
 PEM and DER constructors set ALPN ([`h2`][h2-alpn] and [`http/1.1`][http-1-1]). Building a
 [`ServerConfig`][server-config] yourself means setting it too. Forgetting it silently disables [`h2`][h2-alpn].
-[`from_sni_pem_files`][sni-pem-files] picks certificates by exact name, with no fallback. After
+[`from_sni_pem_files`][sni-pem-files] picks certificates by exact name, with no fallback. When the
+name is only known during the handshake, or certificates arrive later, the [`async_sni`][async-sni-example]
+example implements [`Accept`][accept] with `LazyConfigAcceptor` to resolve the certificate between
+the ClientHello and the rest of the handshake. After
 the handshake, handlers get SNI, ALPN, and any client certificates through
 [`TlsInfo`][tls-info]. Client certificates require a verifier such as
 [`WebPkiClientVerifier`][webpki-client-verifier].
@@ -399,6 +402,7 @@ No TLS backend is on by default.
 [arc-swap]: https://docs.rs/arc-swap/latest/arc_swap/type.ArcSwap.html
 [server-config]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConfig.html
 [sni-pem-files]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsConfig.html#method.from_sni_pem_files
+[async-sni-example]: https://github.com/programatik29/axum-server/blob/master/examples/async_sni.rs
 [webpki-client-verifier]: https://docs.rs/rustls/latest/rustls/server/struct.WebPkiClientVerifier.html
 [tls-rustls-docs]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/index.html
 [features]: https://docs.rs/crate/axum-server/latest/features
