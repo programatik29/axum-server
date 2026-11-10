@@ -48,10 +48,6 @@ address, and one task drives HTTP for that connection. HTTP/2 streams multiplex
 over that task, so blocking it stalls every stream. Blocking work belongs in
 [`spawn_blocking`][spawn-blocking].
 
-[`into_make_service()`][into-make-service] discards the peer address. Its connect-info variant keeps
-it as a [`ConnectInfo`][connect-info] extension, and [`LocalAddrAcceptor`][local-addr-acceptor] adds the address the
-client connected to.
-
 ### Without axum
 
 [`serve`][serve] takes a tower [`MakeService`][make-service]: a service of services, with the connection
