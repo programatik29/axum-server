@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# Unreleased
+
+- **added**: `ConnectionShutdown` is added to the extensions of every request and closes the connection that dispatched it, either immediately or after the in-flight response.
+
 # 0.9.0 (6. November 2026)
 
 - **added**: `Server::first_request_timeout`, which closes connections that do not send a request in time. This also covers the protocol detection read that hyper does before any HTTP timeout applies.
