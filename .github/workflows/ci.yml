@@ -54,6 +54,10 @@ jobs:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
           - {
+              name: "(`tls-rustls-acme`)",
+              features: --features tls-rustls-acme,
+            }
+          - {
               name: "(`tls-rustls-no-provider`)",
               features: --features tls-rustls-no-provider,
             }
@@ -122,6 +126,10 @@ jobs:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
           - {
+              name: "(`tls-rustls-acme`)",
+              features: --features tls-rustls-acme,
+            }
+          - {
               name: "(`tls-rustls-no-provider`)",
               features: --features tls-rustls-no-provider,
             }
@@ -168,6 +176,10 @@ jobs:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
           - {
+              name: "(`tls-rustls-acme`)",
+              features: --features tls-rustls-acme,
+            }
+          - {
               name: "(`rustls/ring`)",
               features: "--features tls-rustls-no-provider,rustls/ring",
             }
@@ -208,6 +220,10 @@ jobs:
         features:
           - { features: "" }
           - { name: "(`tls-rustls`)", features: --features tls-rustls }
+          - {
+              name: "(`tls-rustls-acme`)",
+              features: --features tls-rustls-acme,
+            }
           - {
               name: "(`tls-rustls-no-provider`)",
               features: --features tls-rustls-no-provider,

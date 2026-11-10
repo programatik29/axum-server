@@ -33,6 +33,13 @@ tls-rustls-no-provider = [
     "dep:pin-project-lite",
 ]
 tls-rustls-encrypted-keys = ["tls-rustls-no-provider", "dep:pkcs8"]
+tls-rustls-acme = [
+    "tls-rustls",
+    "dep:rustls-acme",
+    "rustls-acme/aws-lc-rs",
+    "rustls-acme/tls12",
+    "rustls-acme/webpki-roots",
+]
 tls-openssl = [
     "arc-swap",
     "openssl",
@@ -64,6 +71,7 @@ rustls = { version = "0.23", default-features = false, optional = true }
 rustls-pki-types = { version = "1.9", features = ["std"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, optional = true }
 pkcs8 = { version = "0.10", features = ["encryption", "pem"], optional = true }
+rustls-acme = { version = "0.15.4", default-features = false, optional = true }
 
 ## openssl
 openssl = { version = "0.10.61", optional = true }
@@ -87,6 +95,11 @@ tower-http = { version = "0.7", features = ["add-extension"] }
 all-features = true
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "acme"
+required-features = ["tls-rustls-acme"]
+doc-scrape-examples = true
 
 [[example]]
 name = "async_sni"

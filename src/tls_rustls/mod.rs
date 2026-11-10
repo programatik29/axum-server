@@ -426,7 +426,7 @@ impl fmt::Debug for RustlsConfig {
 
 const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
-fn set_alpn(config: &mut ServerConfig) {
+pub(crate) fn set_alpn(config: &mut ServerConfig) {
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|proto| proto.to_vec()).collect();
 }
 
