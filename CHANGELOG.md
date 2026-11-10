@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
-# Unreleased
+# 0.9.1 (10. November 2026)
 
 - **added**: `ConnectionShutdown` is added to the extensions of every request and closes the connection that dispatched it, either immediately or after the in-flight response.
 - **added**: `Control`, an address-agnostic handle that shares shutdown and connection counting across servers listening on different address types. Build a per-listener `Handle` with `Handle::with_control`.
