@@ -32,6 +32,11 @@ tls-rustls-no-provider = [
     "dep:fs-err",
     "dep:pin-project-lite",
 ]
+tls-rustls-ring = [
+    "tls-rustls-no-provider",
+    "rustls/ring",
+    "rustls/tls12",
+]
 tls-rustls-encrypted-keys = ["tls-rustls-no-provider", "dep:pkcs8"]
 tls-rustls-acme = [
     "tls-rustls",

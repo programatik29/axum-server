@@ -225,9 +225,14 @@ for certificates to renew. See [`examples/acme.rs`][acme-example]. `ZeroSSL` nee
 account binding, which `rustls-acme` does not support; Let's Encrypt works.
 
 The rustls provider is process-global. [`tls-rustls`][tls-rustls-docs] brings
-[`aws-lc-rs`][aws-lc-rs], while [`tls-rustls-no-provider`][features] leaves the
-choice to your application. [`tls-openssl`][tls-openssl-docs] is for FIPS
-environments. Handshakes time out after ten seconds by default.
+[`aws-lc-rs`][aws-lc-rs], [`tls-rustls-ring`][features] brings [`ring`][ring],
+and [`tls-rustls-no-provider`][features] leaves the choice to your application.
+If both provider features are enabled, configurations built by the crate use
+aws-lc-rs unless a provider was already installed; the ACME feature implies it.
+The crate does not install a process-wide default, so call
+`CryptoProvider::install_default` if other code uses rustls' convenience
+builders. [`tls-openssl`][tls-openssl-docs] is for FIPS environments. Handshakes
+time out after ten seconds by default.
 
 ## Operations
 
@@ -379,6 +384,7 @@ axum-server = "0.9"
 ```
 
 - [`tls-rustls`][tls-rustls-docs] — [rustls] with [`aws-lc-rs`][aws-lc-rs], TLS 1.2 and 1.3.
+- [`tls-rustls-ring`][features] — [rustls] with [`ring`][ring], TLS 1.2 and 1.3.
 - [`tls-rustls-no-provider`][features] — rustls without a provider, so choose [`ring`][ring] or
   install one at startup.
 - [`tls-rustls-encrypted-keys`][features] — encrypted PKCS#8 private keys.

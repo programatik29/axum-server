@@ -58,6 +58,10 @@ jobs:
               features: --features tls-rustls-acme,
             }
           - {
+              name: "(`tls-rustls-ring`)",
+              features: --features tls-rustls-ring,
+            }
+          - {
               name: "(`tls-rustls-no-provider`)",
               features: --features tls-rustls-no-provider,
             }
@@ -130,6 +134,10 @@ jobs:
               features: --features tls-rustls-acme,
             }
           - {
+              name: "(`tls-rustls-ring`)",
+              features: --features tls-rustls-ring,
+            }
+          - {
               name: "(`tls-rustls-no-provider`)",
               features: --features tls-rustls-no-provider,
             }
@@ -180,6 +188,10 @@ jobs:
               features: --features tls-rustls-acme,
             }
           - {
+              name: "(`tls-rustls-ring`)",
+              features: --features tls-rustls-ring,
+            }
+          - {
               name: "(`rustls/ring`)",
               features: "--features tls-rustls-no-provider,rustls/ring",
             }
@@ -223,6 +235,10 @@ jobs:
           - {
               name: "(`tls-rustls-acme`)",
               features: --features tls-rustls-acme,
+            }
+          - {
+              name: "(`tls-rustls-ring`)",
+              features: --features tls-rustls-ring,
             }
           - {
               name: "(`tls-rustls-no-provider`)",

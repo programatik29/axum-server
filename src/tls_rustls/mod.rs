@@ -241,7 +241,7 @@ impl RustlsConfig {
                 .map_err(io_other)?;
         }
 
-        let mut config = ServerConfig::builder()
+        let mut config = config_builder()
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(resolver));
 
@@ -430,17 +430,46 @@ pub(crate) fn set_alpn(config: &mut ServerConfig) {
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|proto| proto.to_vec()).collect();
 }
 
-fn crypto_provider() -> &'static Arc<rustls::crypto::CryptoProvider> {
+pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     if let Some(provider) = rustls::crypto::CryptoProvider::get_default() {
+        return provider.clone();
+    }
+
+    if let Some(provider) = provider_from_features() {
         return provider;
     }
 
-    // Building a config installs the provider selected by the enabled rustls
-    // crate features if no provider has been installed yet.
+    // No provider feature is enabled by this crate. Building a config installs
+    // the provider selected by the application's rustls features, if any.
     let _ = ServerConfig::builder();
 
     rustls::crypto::CryptoProvider::get_default()
         .expect("a default CryptoProvider is installed by ServerConfig::builder")
+        .clone()
+}
+
+// Prefer aws-lc-rs when both provider features are enabled, for example under
+// `--all-features`. This selects the provider for configurations built by this
+// crate; it does not install a process-wide default.
+#[cfg(feature = "tls-rustls")]
+fn provider_from_features() -> Option<Arc<rustls::crypto::CryptoProvider>> {
+    Some(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+}
+
+#[cfg(all(not(feature = "tls-rustls"), feature = "tls-rustls-ring"))]
+fn provider_from_features() -> Option<Arc<rustls::crypto::CryptoProvider>> {
+    Some(Arc::new(rustls::crypto::ring::default_provider()))
+}
+
+#[cfg(not(any(feature = "tls-rustls", feature = "tls-rustls-ring")))]
+fn provider_from_features() -> Option<Arc<rustls::crypto::CryptoProvider>> {
+    None
+}
+
+fn config_builder() -> rustls::ConfigBuilder<ServerConfig, rustls::WantsVerifier> {
+    ServerConfig::builder_with_provider(crypto_provider())
+        .with_safe_default_protocol_versions()
+        .expect("the selected CryptoProvider supports the default protocol versions")
 }
 
 fn config_from_der(cert: Vec<Vec<u8>>, key: Vec<u8>) -> io::Result<ServerConfig> {
@@ -454,7 +483,7 @@ fn config_from_cert_and_key(
     cert: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 ) -> io::Result<ServerConfig> {
-    let mut config = ServerConfig::builder()
+    let mut config = config_builder()
         .with_no_client_auth()
         .with_single_cert(cert, key)
         .map_err(io_other)?;
@@ -553,6 +582,15 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use tokio::{net::TcpStream, task::JoinHandle};
     use tokio_rustls::TlsConnector;
+
+    // Under `--all-features` both aws-lc-rs and ring are compiled in. Building
+    // a config must pick one instead of letting rustls panic, without relying
+    // on a process-wide default.
+    #[cfg(any(feature = "tls-rustls", feature = "tls-rustls-ring"))]
+    #[test]
+    fn config_builder_selects_a_provider() {
+        let _ = super::config_builder();
+    }
 
     #[tokio::test]
     async fn start_and_request() {
@@ -963,7 +1001,9 @@ mod tests {
             }
         }
 
-        let mut client_config = ClientConfig::builder()
+        let mut client_config = ClientConfig::builder_with_provider(super::crypto_provider())
+            .with_safe_default_protocol_versions()
+            .expect("the selected CryptoProvider supports the default protocol versions")
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoVerify))
             .with_no_client_auth();

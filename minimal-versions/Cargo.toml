@@ -7,6 +7,7 @@ version = "0.0.0"
 [features]
 tls-rustls = ["axum-server/tls-rustls", "dep:aws-lc-rs"]
 tls-rustls-no-provider = ["axum-server/tls-rustls-no-provider"]
+tls-rustls-ring = ["axum-server/tls-rustls-ring"]
 tls-rustls-acme = ["tls-rustls", "axum-server/tls-rustls-acme"]
 tls-openssl = ["axum-server/tls-openssl"]
 
