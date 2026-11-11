@@ -35,7 +35,8 @@
 //!   TLS 1.2 and TLS 1.3 are enabled.
 //! * `tls-rustls-ring` - activate [rustls] support with the `ring` provider.
 //!   TLS 1.2 and TLS 1.3 are enabled. When both provider features are enabled,
-//!   configurations built by this crate use `aws-lc-rs`.
+//!   configurations built by this crate use `aws-lc-rs` unless a provider is
+//!   already installed.
 //! * `tls-rustls-no-provider` - activate [rustls] support without selecting a
 //!   cryptography provider. Enable a provider through `rustls` (for example
 //!   the `ring` feature) or install one at runtime.
