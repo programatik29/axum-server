@@ -42,8 +42,6 @@
 //!   the `ring` feature) or install one at runtime.
 //! * `tls-rustls-encrypted-keys` - additionally support encrypted PKCS#8
 //!   private keys in [`RustlsConfig`].
-//! * `tls-rustls-acme` - additionally support automatic certificates through
-//!   [rustls-acme] (ACME, for example Let's Encrypt). Implies `tls-rustls`.
 //! * `tls-openssl` - activate [openssl] support.
 //!
 //! # Example
@@ -77,7 +75,6 @@
 //! [openssl]: https://crates.io/crates/openssl
 //! [repository]: https://github.com/programatik29/axum-server/tree/master/examples
 //! [rustls]: https://crates.io/crates/rustls
-//! [rustls-acme]: https://crates.io/crates/rustls-acme
 //! [tower]: https://crates.io/crates/tower
 //! [`axum`]: https://docs.rs/axum/0.8
 //! [`serve`]: crate::server::Server::serve
@@ -140,10 +137,6 @@ pub use self::tls_rustls::{bind_rustls, from_tcp_rustls};
 #[doc(inline)]
 #[cfg(all(feature = "tls-rustls-no-provider", unix))]
 pub use self::tls_rustls::from_unix_rustls;
-
-#[cfg(feature = "tls-rustls-acme")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tls-rustls-acme")))]
-pub mod acme;
 
 #[cfg(feature = "tls-openssl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tls-openssl")))]

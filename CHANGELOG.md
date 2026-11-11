@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
-# Unreleased
+# 0.9.2 (11. November 2026)
 
 - **added**: the `tls-rustls-ring` feature, which uses the `ring` provider instead of `aws-lc-rs`. If both provider features are enabled, `aws-lc-rs` is used.
+- **removed**: the `tls-rustls-acme` feature and `acme` module introduced in 0.9.1. 0.9.1 is yanked.
 
-# 0.9.1 (10. November 2026)
+# 0.9.1 (10. November 2026) [yanked]
 
 - **added**: `ConnectionShutdown` is added to the extensions of every request and closes the connection that dispatched it, either immediately or after the in-flight response.
 - **added**: `Control`, an address-agnostic handle that shares shutdown and connection counting across servers listening on different address types. Build a per-listener `Handle` with `Handle::with_control`.

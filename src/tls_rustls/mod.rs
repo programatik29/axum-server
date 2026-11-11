@@ -426,11 +426,11 @@ impl fmt::Debug for RustlsConfig {
 
 const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
-pub(crate) fn set_alpn(config: &mut ServerConfig) {
+fn set_alpn(config: &mut ServerConfig) {
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|proto| proto.to_vec()).collect();
 }
 
-pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
     if let Some(provider) = rustls::crypto::CryptoProvider::get_default() {
         return provider.clone();
     }
