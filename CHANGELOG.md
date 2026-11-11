@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog], and this project adheres to
 [Semantic Versioning].
 
+# Unreleased
+
+- **added**: the `tls-rustls-ring` feature, which uses the `ring` provider instead of `aws-lc-rs`. If both provider features are enabled, `aws-lc-rs` is used.
+
 # 0.9.1 (10. November 2026)
 
 - **added**: `ConnectionShutdown` is added to the extensions of every request and closes the connection that dispatched it, either immediately or after the in-flight response.
