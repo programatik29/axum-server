@@ -243,7 +243,9 @@ mod tests {
             }
         }
 
-        let mut config = ClientConfig::builder()
+        let mut config = ClientConfig::builder_with_provider(crate::tls_rustls::crypto_provider())
+            .with_safe_default_protocol_versions()
+            .expect("the selected CryptoProvider supports the default protocol versions")
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoVerify))
             .with_no_client_auth();

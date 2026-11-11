@@ -227,8 +227,10 @@ account binding, which `rustls-acme` does not support; Let's Encrypt works.
 The rustls provider is process-global. [`tls-rustls`][tls-rustls-docs] brings
 [`aws-lc-rs`][aws-lc-rs], [`tls-rustls-ring`][features] brings [`ring`][ring],
 and [`tls-rustls-no-provider`][features] leaves the choice to your application.
-If both provider features are enabled, aws-lc-rs is used; the ACME feature
-implies it. [`tls-openssl`][tls-openssl-docs] is for FIPS
+If both provider features are enabled, configurations built by the crate use
+aws-lc-rs; the ACME feature implies it. The crate does not install a
+process-wide default, so call `CryptoProvider::install_default` if other code
+uses rustls' convenience builders. [`tls-openssl`][tls-openssl-docs] is for FIPS
 environments. Handshakes time out after ten seconds by default.
 
 ## Operations
