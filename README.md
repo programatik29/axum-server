@@ -376,14 +376,14 @@ They can track different axum-server versions, so check their compatibility
 before use.
 
 - [`axum-server-acme`][axum-server-acme] — automatic ACME certificates (for example Let's
-  Encrypt) for the rustls backend. Targets axum-server 0.9.
+  Encrypt) for the rustls backend.
 - [`axum-server-dual-protocol2`][axum-server-dual-protocol2] — fork of
   [`axum-server-dual-protocol`][axum-server-dual-protocol] that serves HTTP and HTTPS on the
-  same port. Targets axum-server 0.9.
+  same port.
 - [`axum-server-mtls`][axum-server-mtls] — extracts client certificates from the rustls
-  acceptor into request extensions. Targets axum-server 0.8.
+  acceptor into request extensions.
 - [`axum-server-maybetlsacceptor`][axum-server-maybetlsacceptor] — enum acceptor that serves
-  with or without TLS, chosen at startup. Targets axum-server 0.8.
+  with or without TLS, chosen at startup.
 
 ### Cargo features
 
