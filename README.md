@@ -369,6 +369,22 @@ See [`examples/multiple_listeners.rs`][multiple-listeners-example] for a full pr
 
 ## Reference
 
+### Companion crates
+
+These crates are maintained separately and add functionality around axum-server.
+They can track different axum-server versions, so check their compatibility
+before use.
+
+- [`axum-server-acme`][axum-server-acme] — automatic ACME certificates (for example Let's
+  Encrypt) for the rustls backend.
+- [`axum-server-dual-protocol2`][axum-server-dual-protocol2] — fork of
+  [`axum-server-dual-protocol`][axum-server-dual-protocol] that serves HTTP and HTTPS on the
+  same port.
+- [`axum-server-mtls`][axum-server-mtls] — extracts client certificates from the rustls
+  acceptor into request extensions.
+- [`axum-server-maybetlsacceptor`][axum-server-maybetlsacceptor] — enum acceptor that serves
+  with or without TLS, chosen at startup.
+
 ### Cargo features
 
 ```toml
@@ -451,6 +467,11 @@ No TLS backend is on by default.
 [ring]: https://crates.io/crates/ring
 [forbid]: https://doc.rust-lang.org/reference/attributes/diagnostics.html#the-forbid-attribute
 [axum]: https://crates.io/crates/axum
+[axum-server-acme]: https://crates.io/crates/axum-server-acme
+[axum-server-dual-protocol2]: https://crates.io/crates/axum-server-dual-protocol2
+[axum-server-dual-protocol]: https://crates.io/crates/axum-server-dual-protocol
+[axum-server-mtls]: https://crates.io/crates/axum-server-mtls
+[axum-server-maybetlsacceptor]: https://crates.io/crates/axum-server-maybetlsacceptor
 [hyper]: https://crates.io/crates/hyper
 [hyper-util]: https://crates.io/crates/hyper-util
 [openssl]: https://crates.io/crates/openssl
