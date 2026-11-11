@@ -218,17 +218,11 @@ After the handshake, handlers get SNI, ALPN, and client certificates through
 [`TlsInfo`][tls-info]. Client certificates need a verifier such as
 [`WebPkiClientVerifier`][webpki-client-verifier].
 
-The optional [`tls-rustls-acme`][features] feature adds automatic certificates
-through [`rustls-acme`][rustls-acme] and the [`acme`][acme-module] module. TLS-ALPN-01 is used, so
-the server must be reachable on port 443, and the application must keep polling the `AcmeState`
-for certificates to renew. See [`examples/acme.rs`][acme-example]. `ZeroSSL` needs external
-account binding, which `rustls-acme` does not support; Let's Encrypt works.
-
 The rustls provider is process-global. [`tls-rustls`][tls-rustls-docs] brings
 [`aws-lc-rs`][aws-lc-rs], [`tls-rustls-ring`][features] brings [`ring`][ring],
 and [`tls-rustls-no-provider`][features] leaves the choice to your application.
 If both provider features are enabled, configurations built by the crate use
-aws-lc-rs unless a provider was already installed; the ACME feature implies it.
+aws-lc-rs unless a provider was already installed.
 The crate does not install a process-wide default, so call
 `CryptoProvider::install_default` if other code uses rustls' convenience
 builders. [`tls-openssl`][tls-openssl-docs] is for FIPS environments. Handshakes
@@ -388,8 +382,6 @@ axum-server = "0.9"
 - [`tls-rustls-no-provider`][features] — rustls without a provider, so choose [`ring`][ring] or
   install one at startup.
 - [`tls-rustls-encrypted-keys`][features] — encrypted PKCS#8 private keys.
-- [`tls-rustls-acme`][features] — automatic certificates through [`rustls-acme`][rustls-acme]
-  (ACME, for example Let's Encrypt). Implies `tls-rustls`.
 - [`tls-openssl`][tls-openssl-docs] — TLS through [openssl].
 
 No TLS backend is on by default.
@@ -430,9 +422,6 @@ No TLS backend is on by default.
 [server-config]: https://docs.rs/rustls/latest/rustls/server/struct.ServerConfig.html
 [sni-pem-files]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/struct.RustlsConfig.html#method.from_sni_pem_files
 [async-sni-example]: https://github.com/programatik29/axum-server/blob/master/examples/async_sni.rs
-[rustls-acme]: https://crates.io/crates/rustls-acme
-[acme-module]: https://docs.rs/axum-server/latest/axum_server/acme/index.html
-[acme-example]: https://github.com/programatik29/axum-server/blob/master/examples/acme.rs
 [webpki-client-verifier]: https://docs.rs/rustls/latest/rustls/server/struct.WebPkiClientVerifier.html
 [tls-rustls-docs]: https://docs.rs/axum-server/latest/axum_server/tls_rustls/index.html
 [features]: https://docs.rs/crate/axum-server/latest/features

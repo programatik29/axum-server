@@ -117,7 +117,7 @@ where
     }
 }
 
-pub(crate) fn tls_info<I>(stream: &TlsStream<I>) -> TlsInfo {
+fn tls_info<I>(stream: &TlsStream<I>) -> TlsInfo {
     let (_, connection) = stream.get_ref();
 
     TlsInfo::new(
